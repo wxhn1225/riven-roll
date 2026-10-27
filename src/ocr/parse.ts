@@ -200,6 +200,19 @@ function joinWrapped(items: OcrItem[]): OcrItem[] {
   return items.filter((i) => !taken.has(i)).map((i) => joined.get(i) ?? i);
 }
 
+const HAN = /[一-鿿]/;
+/** Two texts of one length that differ in exactly one place, a Chinese character in both. */
+function oneHanOff(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let off = -1;
+  for (let i = 0; i < a.length; i++)
+    if (a[i] !== b[i]) {
+      if (off >= 0) return false;
+      off = i;
+    }
+  return off >= 0 && HAN.test(a[off]) && HAN.test(b[off]);
+}
+
 /** OCR reads icons and sparkles as a lone Chinese character (十, 压): Chinese text has two or more in a box */
 const chinese = (s: string) => (s.match(/[一-鿿]/g) ?? []).length >= 2;
 /** characters a 繁中 cycle screen is full of (傷害, 暴擊, 剩餘, 適用於, 循環, 鎖定) and a 简中 one never shows */
@@ -328,6 +341,17 @@ export function parseScreen(items: OcrItem[], width: number): ParsedScreen {
       }
     if (weaponId) break;
   }
+  // a rare character the reader has no glyph for comes out as another (天薙刀 as 天雍刀): a title that starts with a Chinese
+  // name of three or more characters but for one of them names that weapon, when no other weapon is that close
+  if (!weaponId)
+    for (const title of titles) {
+      const t = foldOcr(squash(title));
+      const near = new Set(weaponNames.filter((w) => w.folded.length >= 3 && oneHanOff(t.slice(0, w.folded.length), w.folded)).map((w) => w.id));
+      if (near.size === 1) {
+        weaponId = [...near][0];
+        break;
+      }
+    }
 
   let kuva: number | null = null;
   const kuvaItem = items.find((i) => KUVA_LABEL.test(i.text));

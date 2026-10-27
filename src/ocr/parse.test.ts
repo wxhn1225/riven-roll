@@ -12,6 +12,7 @@ import v1_end from "./fixtures/v1_end.json";
 import v2_1485 from "./fixtures/v2_1485.json";
 import v3_105 from "./fixtures/v3_105_compare.json";
 import v3_end from "./fixtures/v3_end.json";
+import zh_amanata from "./fixtures/zh_amanata_photo.json";
 import zh_okina from "./fixtures/zh_okina.json";
 import { parseScreen } from "./parse";
 
@@ -116,6 +117,28 @@ describe("parseScreen on 国服 screenshots", () => {
   it("finds the multishot card on another comparison frame", () => {
     const c = parseScreen(v1_345.items, v1_345.width).cards[0];
     expect(c.traits.map(brief)).toEqual(["+FireIterations:144.5", "+CritDamage:99.4", "+ProjectileSpeed:108.6", "-CritChance:-144.3"]);
+  });
+
+  it("finds the weapon when the reader gets one rare character of its name wrong", () => {
+    // a phone photo of the mod screen: 天薙刀 reads as 天雍刀, the reader has no 薙
+    const s = parseScreen(zh_amanata.items, zh_amanata.width);
+    expect(s.weaponId).toBe("/Lotus/Weapons/Tenno/Melee/Polearms/Naginata/ShrineMaidenNaginataWeapon");
+    const card = s.cards[0];
+    expect(card.traits.map(brief)).toEqual(["+ToxinDamage:106.5", "+CritDamage:109.6", "+MeleeRangeInc:2.3", "-MeleeComboEfficiency:-61.8"]);
+    expect([card.mr, card.cycles, card.layout]).toEqual([15, 59, { pos: 3, neg: 1 }]);
+  });
+
+  it("leaves the weapon out when a character off could be either of two weapons", () => {
+    const title = (text: string) =>
+      parseScreen(
+        zh_amanata.items.map((i) => (i.text === "天雍刀Acrg-" ? { ...i, text } : i)),
+        zh_amanata.width,
+      ).weaponId;
+    // 苍穹双剑 and 苍穹之剑 are both one character from 苍穹乙剑
+    expect(title("苍穹双剑Acrg-")).not.toBeNull();
+    expect(title("苍穹乙剑Acrg-")).toBeNull();
+    // two characters are too few to guess from
+    expect(title("绝露Acrg-")).toBeNull();
   });
 
   it("does not invent values the chat window covers", () => {
