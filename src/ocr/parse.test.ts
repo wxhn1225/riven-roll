@@ -123,6 +123,8 @@ describe("parseScreen on 国服 screenshots", () => {
     const card = s.cards.find((c) => c.traits.some((t) => t.tag === "WeaponCritDamageMod"));
     expect(card).toBeDefined();
     expect(card?.layout).toBeNull();
+    // the cycle count comes from the footer row, not the trait line just above it ("7%装填速度")
+    expect(card?.cycles).toBe(36);
   });
 });
 
@@ -189,6 +191,46 @@ describe("parseScreen on English screens", () => {
       [false, false],
     ]);
     expect([card.mr, card.cycles, card.layout]).toEqual([13, 23, { pos: 3, neg: 1 }]);
+  });
+
+  it("keeps a trait whose value was missed apart from the trait above it", () => {
+    // "Reload Speed" is a whole stat name of its own, not the end of the toxin line
+    const s = parseScreen(swap({ "+53.3% Reload Speed": "Reload Speed" }), en_drawn.width);
+    expect(s.cards[0].traits.map(brief)).toEqual(["+CritDamage:143.4", "+ToxinDamage:103.4", "+ReloadSpeed:null", "-ZoomFov:-54.2"]);
+  });
+
+  it("finds the card footer under a last trait that wraps", () => {
+    const s = parseScreen(
+      en_baza.items.filter((i) => i.text !== "+89.1% Weapon Recoil"),
+      en_baza.width,
+    );
+    expect(s.cards[0].traits.map(brief)).toEqual(["+CritChance:170.8", "+CritDamage:146.3", "+WeakpointDamage:257.4"]);
+    expect([s.cards[0].mr, s.cards[0].cycles, s.cards[0].layout]).toEqual([13, 23, { pos: 3, neg: 0 }]);
+  });
+
+  it("joins the right line whatever order stray marks are read in", () => {
+    const stray = { text: "θ", box: { x: 240, y: 596, w: 20, h: 22 }, conf: 0.5 };
+    const items = en_baza.items.flatMap((i) => (i.text === "Damage" ? [stray, i] : [i]));
+    expect(parseScreen(items, en_baza.width).cards[0].traits.map(brief)[2]).toBe("+WeakpointDamage:257.4");
+  });
+
+  it("joins a value read on its own with the stat name on the next line", () => {
+    const rename: Record<string, string> = { "θ +257.4% Weak Point": "θ +257.4%", Damage: "Weak Point Damage" };
+    const trait = parseScreen(
+      en_baza.items.map((i) => ({ ...i, text: rename[i.text] ?? i.text })),
+      en_baza.width,
+    ).cards[0].traits[2];
+    expect([brief(trait), trait.locked]).toEqual(["+WeakpointDamage:257.4", true]);
+    // a Chinese name comes before its value, which can wrap onto the next line
+    const zh: Record<string, string> = { "θ +257.4% Weak Point": "收起武器时弹匣每秒自动装填", Damage: "+101.2%" };
+    expect(
+      brief(
+        parseScreen(
+          en_baza.items.map((i) => ({ ...i, text: zh[i.text] ?? i.text })),
+          en_baza.width,
+        ).cards[0].traits[2],
+      ),
+    ).toBe("+MagazineReloadHolstered:101.2");
   });
 
   it("leaves a line under a trait alone when together they read no other stat", () => {

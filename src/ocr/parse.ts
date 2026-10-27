@@ -116,7 +116,7 @@ const toInt = (s: string) => Number(s.replace(/[^\d]/g, ""));
  * A trait line, and the languages that write its stat name the way it was read (null when it was read only with
  * 繁中 folded, which says nothing about the client).
  */
-function readTrait(item: OcrItem): { trait: ParsedTrait; langs: Lang[] | null } | null {
+function readTrait(item: OcrItem): { trait: ParsedTrait; langs: Lang[] | null; stat: NameEntry } | null {
   const text = normalize(item.text);
   const m = VALUE.exec(text);
   const before = m ? text.slice(0, m.index) : "";
@@ -150,31 +150,52 @@ function readTrait(item: OcrItem): { trait: ParsedTrait; langs: Lang[] | null } 
   const at = joined.indexOf(stat.name);
   const lead = stat === after ? before : joined.slice(0, at >= 0 ? at : Math.max(0, foldOcr(joined).indexOf(stat.folded)));
   const locked = m != null && /[^\s]/.test(lead);
-  return { trait: { tag: stat.tag, shown, curse, spliced: def.spliced, locked, raw: item.text }, langs: at >= 0 ? stat.langs : null };
+  return { trait: { tag: stat.tag, shown, curse, spliced: def.spliced, locked, raw: item.text }, langs: at >= 0 ? stat.langs : null, stat };
 }
 
 const parseTrait = (item: OcrItem): ParsedTrait | null => readTrait(item)?.trait ?? null;
 
+const valued = (i: OcrItem) => VALUE.test(normalize(i.text));
+
 /**
- * A long stat name can wrap onto the line under it ("θ +257.4% Weak Point" / "Damage"). A line with a value takes the
- * line right under it when that one has no value and the two together read another stat than the first alone.
+ * Two lines of one card, one right under the other and only one with a value, as a single trait line: a long name that
+ * wraps ("θ +257.4% Weak Point" / "Damage"), or a Chinese name whose value, written after it, goes to the next line.
+ * Only when the name runs across both lines, or the value line holds nothing but the value (and the lock): a line that
+ * reads a whole stat of its own is a trait whose value was missed, not the rest of the line above.
  */
+function joinLines(upper: OcrItem, lower: OcrItem): OcrItem | null {
+  const [u, l] = [upper.box, lower.box];
+  const overlap = Math.min(u.x + u.w, l.x + l.w) - Math.max(u.x, l.x);
+  if (valued(upper) === valued(lower) || l.y <= u.y || l.y - (u.y + u.h) >= Math.min(u.h, l.h) || overlap <= Math.min(u.w, l.w) / 2) return null;
+  const x = Math.min(u.x, l.x);
+  const both = { ...upper, text: `${upper.text} ${lower.text}`, box: { x, y: u.y, w: Math.max(u.x + u.w, l.x + l.w) - x, h: l.y + l.h - u.y } };
+  const read = readTrait(both);
+  if (read?.trait.shown == null) return null;
+  const line = squash(normalize(both.text));
+  const cut = squash(normalize(upper.text)).length;
+  const found = line.indexOf(read.stat.name);
+  const [at, length] = found >= 0 ? [found, read.stat.name.length] : [foldOcr(line).indexOf(read.stat.folded), read.stat.folded.length];
+  const bare = squash(normalize(valued(upper) ? upper.text : lower.text).replace(VALUE, "")).length <= 1;
+  return bare || (at < cut && at + length > cut) ? both : null;
+}
+
+/** Trait lines put back together where they wrap; a line that could go with more than one other is left as read. */
 function joinWrapped(items: OcrItem[]): OcrItem[] {
-  const hasValue = (i: OcrItem) => VALUE.test(normalize(i.text));
+  const pairs: { upper: OcrItem; lower: OcrItem; both: OcrItem }[] = [];
+  for (const upper of items)
+    for (const lower of items) {
+      const both = upper !== lower && joinLines(upper, lower);
+      if (both) pairs.push({ upper, lower, both });
+    }
+  const uses = new Map<OcrItem, number>();
+  for (const { upper, lower } of pairs) for (const i of [upper, lower]) uses.set(i, (uses.get(i) ?? 0) + 1);
   const joined = new Map<OcrItem, OcrItem>();
   const taken = new Set<OcrItem>();
-  for (const a of items) {
-    if (!hasValue(a)) continue;
-    const under = items.find((b) => !taken.has(b) && !hasValue(b) && b.box.y > a.box.y && b.box.y - (a.box.y + a.box.h) < a.box.h && Math.abs(cx(b) - cx(a)) < a.box.w / 2);
-    if (!under) continue;
-    const x = Math.min(a.box.x, under.box.x);
-    const both = { ...a, text: `${a.text} ${under.text}`, box: { ...a.box, x, w: Math.max(a.box.x + a.box.w, under.box.x + under.box.w) - x } };
-    const read = parseTrait(both);
-    if (read && read.tag !== parseTrait(a)?.tag) {
-      joined.set(a, both);
-      taken.add(under);
+  for (const { upper, lower, both } of pairs)
+    if (uses.get(upper) === 1 && uses.get(lower) === 1) {
+      joined.set(upper, both);
+      taken.add(lower);
     }
-  }
   return items.filter((i) => !taken.has(i)).map((i) => joined.get(i) ?? i);
 }
 
@@ -242,7 +263,8 @@ export function parseScreen(items: OcrItem[], width: number): ParsedScreen {
     const right = Math.max(...col.map((t) => t.item.box.x + t.item.box.w)) + width * 0.03;
     const top = col[0].item.box.y;
     const bottom = col[col.length - 1].item.box.y + col[col.length - 1].item.box.h;
-    const lineH = col[0].item.box.h || 20;
+    // one line's height: a trait joined from two lines is twice as tall
+    const lineH = Math.min(...col.map((t) => t.item.box.h)) || 20;
     const inColumn = (i: OcrItem) => cx(i) > left && cx(i) < right;
 
     const titleItems = items.filter((i) => inColumn(i) && i.box.y < top && i.box.y > top - lineH * 3.5 && !parseTrait(i)).sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
