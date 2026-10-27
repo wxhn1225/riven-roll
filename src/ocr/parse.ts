@@ -171,12 +171,13 @@ function joinLines(upper: OcrItem, lower: OcrItem): OcrItem | null {
   const both = { ...upper, text: `${upper.text} ${lower.text}`, box: { x, y: u.y, w: Math.max(u.x + u.w, l.x + l.w) - x, h: l.y + l.h - u.y } };
   const read = readTrait(both);
   if (read?.trait.shown == null) return null;
-  const line = squash(normalize(both.text));
-  const cut = squash(normalize(upper.text)).length;
+  // the name is looked for with the value taken out, as readTrait does: two 繁中 names hold it in the middle (滑行攻擊 +135% 暴擊機率)
+  const [top, bottom] = [upper, lower].map((i) => squash(normalize(i.text).replace(VALUE, "")));
+  const line = top + bottom;
   const found = line.indexOf(read.stat.name);
   const [at, length] = found >= 0 ? [found, read.stat.name.length] : [foldOcr(line).indexOf(read.stat.folded), read.stat.folded.length];
-  const bare = squash(normalize(valued(upper) ? upper.text : lower.text).replace(VALUE, "")).length <= 1;
-  return bare || (at < cut && at + length > cut) ? both : null;
+  const bare = (valued(upper) ? top : bottom).length <= 1;
+  return bare || (at >= 0 && at < top.length && at + length > top.length) ? both : null;
 }
 
 /** Trait lines put back together where they wrap; a line that could go with more than one other is left as read. */

@@ -233,6 +233,20 @@ describe("parseScreen on English screens", () => {
     ).toBe("+MagazineReloadHolstered:101.2");
   });
 
+  it("joins a 繁中 name that holds its value in the middle when it wraps after the value", () => {
+    const wrapped = (upper: string, lower: string) => {
+      const map: Record<string, string> = { "θ +257.4% Weak Point": upper, Damage: lower };
+      return brief(
+        parseScreen(
+          en_baza.items.map((i) => ({ ...i, text: map[i.text] ?? i.text })),
+          en_baza.width,
+        ).cards[0].traits[2],
+      );
+    };
+    expect(wrapped("滑行攻擊 +135%", "暴擊機率")).toBe("+SlideAttackCritChance:135");
+    expect(wrapped("重擊時，+134.7%", "近戰傷害")).toBe("+MeleeHeavyAttackDamage:134.7");
+  });
+
   it("leaves a line under a trait alone when together they read no other stat", () => {
     const wrapped = en_baza.items.find((i) => i.text === "Damage");
     const s = parseScreen(
