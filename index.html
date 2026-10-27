@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Warframe 裂罅 Mod 循环助手：截图识别，按你的目标列出每一步锁定、熔接、循环的概率和赤毒成本。" />
+    <link rel="icon" type="image/png" href="/icons/riven-32.png" />
+    <link rel="preconnect" href="https://content.warframe.com" />
+    <title>裂罅循环助手</title>
+    <!-- a theme picked by hand applies before the first paint (following the system needs no script) -->
+    <script>
+      try {
+        var t = localStorage.getItem("riven-roll:theme");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,34 @@
+{
+  "name": "riven-roll",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "裂罅循环助手：截图识别裂罅 Mod，按目标给出每一步循环、锁定、熔接的路线和成本",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "check": "biome check . && tsc --noEmit && vitest run"
+  },
+  "dependencies": {
+    "@fontsource/newsreader": "5.3.0",
+    "@fontsource/noto-serif-sc": "5.3.1",
+    "@fontsource/noto-serif-tc": "5.3.1",
+    "onnxruntime-web": "1.30.0",
+    "ppu-paddle-ocr": "6.6.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@playwright/test": "1.64.1",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
+}

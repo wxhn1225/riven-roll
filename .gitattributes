@@ -1,0 +1,3 @@
+* text=auto eol=lf
+*.ort binary
+public/models/*.txt -text
