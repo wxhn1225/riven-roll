@@ -6,7 +6,7 @@ import wasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import { PaddleOcrService } from "ppu-paddle-ocr/web";
 import type { OcrItem } from "./parse";
 
-declare const __READER_SIZES__: Record<keyof typeof FILES, number>;
+declare const __READER_SIZES__: Record<FileKey, number>;
 
 const base = new URL(import.meta.env.BASE_URL, self.location.origin).href;
 /** What the reader downloads: the runtime Vite ships next to this worker, and the models. */
@@ -20,40 +20,106 @@ const FILES = {
 ort.env.wasm.wasmPaths = undefined;
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
 
-/** How far the reader has got before it can read a screenshot: downloading its files, loading them, or ready. */
-export type OcrModel = { phase: "download"; loaded: number; total: number } | { phase: "load" } | { phase: "ready" };
+/**
+ * How far the reader has got before it can read a screenshot: downloading its files, loading them, or ready. While it
+ * downloads: bytes so far of the total (as served before compression), bytes a second over the last few seconds, whole
+ * seconds since any byte came, and how many times a file was fetched again.
+ */
+export type OcrModel = { phase: "download"; loaded: number; total: number; speed: number; quiet: number; retries: number } | { phase: "load" } | { phase: "ready" };
 const report = (model: OcrModel) => self.postMessage({ model } satisfies OcrMessage);
 
-/** The reader's files, counted as they arrive (in bytes as served before compression, at each whole percent). */
-async function download(): Promise<Record<keyof typeof FILES, ArrayBuffer>> {
+/** A file that sends nothing this long is fetched again, up to TRIES times in all; a slow one that keeps sending is not. */
+export const STALL_MS = 30_000;
+export const TRIES = 3;
+/** how often a download says how far it is */
+const TICK_MS = 500;
+const SPEED_WINDOW_MS = 3_000;
+
+type FileKey = keyof typeof FILES;
+
+/** The reader's files, each fetched again when it fails or stalls; one that cannot be had stops the others. */
+async function download(): Promise<Record<FileKey, ArrayBuffer>> {
   const total = Object.values(__READER_SIZES__).reduce((a, b) => a + b, 0);
-  let loaded = 0;
-  let percent = -1;
-  const received = (bytes: number) => {
-    loaded += bytes;
-    const now = Math.min(100, Math.floor((loaded / total) * 100));
-    if (now !== percent) {
-      percent = now;
-      report({ phase: "download", loaded: Math.min(loaded, total), total });
+  // bytes of each file's current try; every byte received (failed tries included) with when, for the speed
+  const got = new Map<FileKey, number>();
+  let received = 0;
+  let lastByte = Date.now();
+  const samples: [number, number][] = [[lastByte, 0]];
+  let retries = 0;
+  let said = "";
+  const tell = () => {
+    const now = Date.now();
+    while (samples.length > 1 && now - samples[1][0] >= SPEED_WINDOW_MS) samples.shift();
+    const [since, before] = samples[0];
+    const loaded = Math.min(
+      total,
+      [...got.values()].reduce((a, b) => a + b, 0),
+    );
+    const speed = now > since ? Math.round(((received - before) * 1000) / (now - since)) : 0;
+    const model: OcrModel = { phase: "download", loaded, total, speed, quiet: Math.floor((now - lastByte) / 1000), retries };
+    const text = JSON.stringify(model);
+    if (text !== said) {
+      said = text;
+      report(model);
     }
   };
-  received(0);
-  const files = await Promise.all(
-    Object.entries(FILES).map(async ([key, url]) => {
-      const res = await fetch(url);
-      if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
-      // a fetched body is never shared memory
-      const chunks: Uint8Array<ArrayBuffer>[] = [];
-      for (const reader = res.body.getReader(); ; ) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value as Uint8Array<ArrayBuffer>);
-        received(value.length);
+
+  const stop = new AbortController();
+  const fetchFile = async (key: FileKey, url: string): Promise<ArrayBuffer> => {
+    for (let attempt = 1; ; attempt++) {
+      stop.signal.throwIfAborted();
+      got.set(key, 0);
+      const attemptStop = new AbortController();
+      const abort = () => attemptStop.abort();
+      stop.signal.addEventListener("abort", abort);
+      let stall = setTimeout(abort, STALL_MS);
+      try {
+        const res = await fetch(url, { signal: attemptStop.signal });
+        if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
+        // written straight into a buffer of the file's size, grown or cut when the file turns out to differ
+        let bytes = new Uint8Array(__READER_SIZES__[key]);
+        let at = 0;
+        for (const reader = res.body.getReader(); ; ) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          clearTimeout(stall);
+          stall = setTimeout(abort, STALL_MS);
+          if (at + value.length > bytes.length) {
+            const more = new Uint8Array(Math.max(bytes.length * 2, at + value.length));
+            more.set(bytes.subarray(0, at));
+            bytes = more;
+          }
+          bytes.set(value, at);
+          at += value.length;
+          got.set(key, at);
+          received += value.length;
+          lastByte = Date.now();
+          samples.push([lastByte, received]);
+        }
+        return at === bytes.length ? bytes.buffer : bytes.slice(0, at).buffer;
+      } catch (err) {
+        if (stop.signal.aborted || attempt >= TRIES) throw err;
+        retries++;
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      } finally {
+        clearTimeout(stall);
+        stop.signal.removeEventListener("abort", abort);
       }
-      return [key, await new Blob(chunks).arrayBuffer()] as const;
-    }),
-  );
-  return Object.fromEntries(files) as Record<keyof typeof FILES, ArrayBuffer>;
+    }
+  };
+
+  tell();
+  const tick = setInterval(tell, TICK_MS);
+  try {
+    const files = await Promise.all(Object.entries(FILES).map(async ([key, url]) => [key, await fetchFile(key as FileKey, url)] as const));
+    tell();
+    return Object.fromEntries(files) as Record<FileKey, ArrayBuffer>;
+  } catch (err) {
+    stop.abort();
+    throw err;
+  } finally {
+    clearInterval(tick);
+  }
 }
 
 let ready: Promise<PaddleOcrService> | null = null;

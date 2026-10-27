@@ -75,14 +75,14 @@ it("passes on how far the reader has got, and starts over with a new worker", as
   const stop = watchOcrModel((m) => seen.push(m));
   const first = recognize(picture());
   const broken = await nthWorker(1);
-  broken.reply({ model: { phase: "download", loaded: 5, total: 10 } });
+  broken.reply({ model: { phase: "download", loaded: 5, total: 10, speed: 1000, quiet: 0, retries: 0 } });
   broken.reply({ model: { phase: "load" } });
   await posted(broken, 1);
   broken.reply({ id: broken.posted[0].id, ok: false, error: "network", init: true });
   await expect(first).rejects.toMatchObject({ init: true });
   // a late word from the stopped worker is not passed on
   broken.reply({ model: { phase: "ready" } });
-  expect(seen).toEqual([null, null, { phase: "download", loaded: 5, total: 10 }, { phase: "load" }, null]);
+  expect(seen).toEqual([null, null, { phase: "download", loaded: 5, total: 10, speed: 1000, quiet: 0, retries: 0 }, { phase: "load" }, null]);
   stop();
   void recognize(picture()).catch(() => {});
   await nthWorker(2);

@@ -4,7 +4,7 @@ import { formatDisplay, signedDisplayInput } from "../engine/formula";
 import type { Pool } from "../engine/pool";
 import { nameMatches, searchForm } from "../hant";
 import type { Strings } from "../i18n";
-import type { OcrModel } from "../ocr/client";
+import { type OcrModel, watchOcrModel } from "../ocr/client";
 import { type CardDraft, cardLayout, fillLayout, plannedRoll, readQuality, type Session, shownRange, type TraitDraft } from "../state";
 import { DispositionField, NumberField } from "./controls";
 import { KuvaIcon, RivenMark, WeaponImage } from "./icons";
@@ -20,7 +20,41 @@ export interface Shot {
 export type OcrStatus = { kind: "idle" } | { kind: "busy" } | { kind: "done"; ms: number } | { kind: "error"; why: "noCard" | "failed" | "load" };
 
 const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
-const percent = (p: { loaded: number; total: number }) => Math.floor((p.loaded / p.total) * 100);
+const speedOf = (bytes: number) => (bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB/s` : `${Math.round(bytes / 1e3)} KB/s`);
+/** after this many seconds without a byte, the status says so */
+const QUIET_S = 5;
+
+/**
+ * What the reader is doing while a screenshot waits: downloading its files (how far, how fast, whether data still
+ * comes, retries), loading them, or reading. It follows the reader on its own, so its frequent updates redraw only it.
+ */
+function ReaderStatus({ s }: { s: Strings }) {
+  const [model, setModel] = useState<OcrModel | null>(null);
+  useEffect(() => watchOcrModel(setModel), []);
+  if (model?.phase === "load" || model?.phase === "ready")
+    return (
+      <span className="shot-status busy" aria-live="polite">
+        {model.phase === "load" ? s.card.loading : s.card.reading}
+      </span>
+    );
+  const pct = model ? Math.floor((model.loaded / model.total) * 100) : 0;
+  const details = model && [
+    s.card.downloaded(mb(model.loaded), mb(model.total), pct),
+    model.quiet >= QUIET_S ? s.card.quiet(model.quiet) : speedOf(model.speed),
+    ...(model.retries ? [s.card.retried(model.retries)] : []),
+  ];
+  return (
+    <span className="shot-status busy" aria-live="polite">
+      {s.card.downloading}
+      {details ? <span aria-hidden="true"> {details.join(" · ")}</span> : "…"}
+      {model && (
+        <span className="shot-bar" role="progressbar" aria-label={s.card.downloading} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <i style={{ width: `${pct}%` }} />
+        </span>
+      )}
+    </span>
+  );
+}
 
 interface Props {
   s: Strings;
@@ -29,8 +63,6 @@ interface Props {
   pool: Pool | null;
   shot: Shot | null;
   ocr: OcrStatus;
-  /** how far the screenshot reader has got */
-  model: OcrModel | null;
   /** roll bar of a wanted stat for the card's layout, or null when the stat isn't wanted */
   barFor: (tag: string) => number | null;
   onPick: () => void;
@@ -42,25 +74,11 @@ interface Props {
   onDisposition: (d: number) => void;
 }
 
-export function Card({ s, session, cls, pool, shot, ocr, model, barFor, onPick, onWeapon, onCard, onKuva, onDemo, onClear, onDisposition }: Props) {
+export function Card({ s, session, cls, pool, shot, ocr, barFor, onPick, onWeapon, onCard, onKuva, onDemo, onClear, onDisposition }: Props) {
   const { lang, card } = session;
   const layout = cardLayout(card);
   const [zoom, setZoom] = useState(false);
-  // while a screenshot waits, what the reader is doing: downloading its files (how far), loading them, or reading
-  const downloading = ocr.kind === "busy" && (model == null || model.phase === "download");
-  const progress = ocr.kind === "busy" && model?.phase === "download" ? model : null;
-  const status =
-    ocr.kind === "busy"
-      ? downloading
-        ? s.card.downloading
-        : model?.phase === "load"
-          ? s.card.loading
-          : s.card.reading
-      : ocr.kind === "done"
-        ? s.card.readIn((ocr.ms / 1000).toFixed(1))
-        : ocr.kind === "error"
-          ? s.card[ocr.why]
-          : null;
+  const status = ocr.kind === "done" ? s.card.readIn((ocr.ms / 1000).toFixed(1)) : ocr.kind === "error" ? s.card[ocr.why] : null;
 
   // An old riven can hold a stat this weapon no longer rolls (rolled before the game stopped it), or a spliced trait
   // made from one: every stat of the class is offered, those marked; on the card they are kept, locked and counted,
@@ -159,16 +177,14 @@ export function Card({ s, session, cls, pool, shot, ocr, model, barFor, onPick, 
             <ShotImage shot={shot} />
           </button>
           <figcaption>
-            {status && (
-              <span className={`shot-status${ocr.kind === "error" ? " warn" : ocr.kind === "busy" ? " busy" : ""}`} aria-live="polite">
-                {status}
-                {downloading && (progress ? <span aria-hidden="true"> {s.card.downloaded(mb(progress.loaded), mb(progress.total), percent(progress))}</span> : "…")}
-                {progress && (
-                  <span className="shot-bar" role="progressbar" aria-label={s.card.downloading} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent(progress)}>
-                    <i style={{ width: `${percent(progress)}%` }} />
-                  </span>
-                )}
-              </span>
+            {ocr.kind === "busy" ? (
+              <ReaderStatus s={s} />
+            ) : (
+              status && (
+                <span className={`shot-status${ocr.kind === "error" ? " warn" : ""}`} aria-live="polite">
+                  {status}
+                </span>
+              )
             )}
             <button type="button" className="shot-again" onClick={onPick}>
               {s.card.another}
