@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GAME } from "../engine/data";
+import en_baza from "./fixtures/en_baza.json";
 import en_drawn from "./fixtures/en_drawn_cycle.json";
 import en_hirudo from "./fixtures/en_hirudo.json";
 import en_torid from "./fixtures/en_torid.json";
@@ -126,11 +127,12 @@ describe("parseScreen on 国服 screenshots", () => {
 });
 
 // en_drawn: OCR of a drawn English cycle screen in the game's wording;
-// en_hirudo, en_torid: OCR of two players' English riven screenshots
+// en_hirudo, en_torid, en_baza: OCR of players' English riven screenshots
 describe("parseScreen on English screens", () => {
   const RUBICO_PRIME = "/Lotus/Weapons/Tenno/LongGuns/RubicoPrime/RubicoPrimeWeapon";
   const HIRUDO = "/Lotus/Weapons/Infested/Melee/InfWFAccompanyingSparring/InfestedKogake";
   const TORID = "/Lotus/Weapons/ClanTech/Bio/BioWeapon";
+  const BAZA = "/Lotus/Weapons/Tenno/LongGuns/TnSMG/TnSMGWeapon";
   const swap = (map: Record<string, string>) => en_drawn.items.map((i) => ({ ...i, text: map[i.text] ?? i.text }));
   const stray = (text: string, x: number, y: number) => ({ text, box: { x, y, w: 22, h: 22 }, conf: 0.7 });
 
@@ -171,6 +173,33 @@ describe("parseScreen on English screens", () => {
     expect(torid.weaponId).toBe(TORID);
     expect(torid.cards[0].traits.map(brief)).toEqual(["+CritDamage:137.6", "+CritChance:169.4", "+DamageAmount:187.5", "-FactionDamageCorpus:0.56"]);
     expect([torid.cards[0].mr, torid.cards[0].cycles, torid.cards[0].layout]).toEqual([12, 19, { pos: 3, neg: 1 }]);
+  });
+
+  it("joins a stat name the card wraps onto a second line, with the lock read in front of it", () => {
+    // "θ +257.4% Weak Point" / "Damage"
+    const baza = parseScreen(en_baza.items, en_baza.width);
+    expect(baza.lang).toBe("en");
+    expect(baza.weaponId).toBe(BAZA);
+    const card = baza.cards[0];
+    expect(card.traits.map(brief)).toEqual(["+CritChance:170.8", "+CritDamage:146.3", "+WeakpointDamage:257.4", "-RecoilReduction:89.1"]);
+    expect(card.traits.map((t) => [t.spliced, t.locked])).toEqual([
+      [false, false],
+      [false, false],
+      [true, true],
+      [false, false],
+    ]);
+    expect([card.mr, card.cycles, card.layout]).toEqual([13, 23, { pos: 3, neg: 1 }]);
+  });
+
+  it("leaves a line under a trait alone when together they read no other stat", () => {
+    const wrapped = en_baza.items.find((i) => i.text === "Damage");
+    const s = parseScreen(
+      en_baza.items.filter((i) => i !== wrapped).map((i) => (i.text === "θ +257.4% Weak Point" ? { ...i, text: "θ +257.4% Weak Point Damage" } : i)),
+      en_baza.width,
+    );
+    // the footer right under the last trait stays the footer
+    expect(s.cards[0].traits.map(brief).at(-1)).toBe("-RecoilReduction:89.1");
+    expect([s.cards[0].mr, s.cards[0].cycles]).toEqual([13, 23]);
   });
 
   it("still tells 简中 from the same screen in Chinese", () => {

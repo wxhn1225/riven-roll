@@ -155,6 +155,29 @@ function readTrait(item: OcrItem): { trait: ParsedTrait; langs: Lang[] | null } 
 
 const parseTrait = (item: OcrItem): ParsedTrait | null => readTrait(item)?.trait ?? null;
 
+/**
+ * A long stat name can wrap onto the line under it ("θ +257.4% Weak Point" / "Damage"). A line with a value takes the
+ * line right under it when that one has no value and the two together read another stat than the first alone.
+ */
+function joinWrapped(items: OcrItem[]): OcrItem[] {
+  const hasValue = (i: OcrItem) => VALUE.test(normalize(i.text));
+  const joined = new Map<OcrItem, OcrItem>();
+  const taken = new Set<OcrItem>();
+  for (const a of items) {
+    if (!hasValue(a)) continue;
+    const under = items.find((b) => !taken.has(b) && !hasValue(b) && b.box.y > a.box.y && b.box.y - (a.box.y + a.box.h) < a.box.h && Math.abs(cx(b) - cx(a)) < a.box.w / 2);
+    if (!under) continue;
+    const x = Math.min(a.box.x, under.box.x);
+    const both = { ...a, text: `${a.text} ${under.text}`, box: { ...a.box, x, w: Math.max(a.box.x + a.box.w, under.box.x + under.box.w) - x } };
+    const read = parseTrait(both);
+    if (read && read.tag !== parseTrait(a)?.tag) {
+      joined.set(a, both);
+      taken.add(under);
+    }
+  }
+  return items.filter((i) => !taken.has(i)).map((i) => joined.get(i) ?? i);
+}
+
 /** OCR reads icons and sparkles as a lone Chinese character (十, 压): Chinese text has two or more in a box */
 const chinese = (s: string) => (s.match(/[一-鿿]/g) ?? []).length >= 2;
 /** characters a 繁中 cycle screen is full of (傷害, 暴擊, 剩餘, 適用於, 循環, 鎖定) and a 简中 one never shows */
@@ -189,7 +212,7 @@ function detectLang(items: OcrItem[], titles: string[], lines: (Lang[] | null)[]
 // ---------- main ----------
 
 export function parseScreen(items: OcrItem[], width: number): ParsedScreen {
-  const traitItems = items.flatMap((item) => {
+  const traitItems = joinWrapped(items).flatMap((item) => {
     const read = readTrait(item);
     return read ? [{ item, ...read }] : [];
   });
