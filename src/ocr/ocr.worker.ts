@@ -81,9 +81,11 @@ async function recognizeRequest({ id, image }: OcrRequest) {
 }
 
 // A shared inference session must finish the current image before starting another. Of the images waiting, only the
-// newest is still wanted: an older one is answered at once as superseded.
+// newest (by id, the order they were chosen in) is still wanted: an older one is answered at once as superseded.
 let running: Promise<void> | null = null;
 let next: OcrRequest | null = null;
+let newest = 0;
+const supersede = (request: OcrRequest) => self.postMessage({ id: request.id, ok: false, error: "superseded" } satisfies OcrResponse);
 self.onmessage = (e: MessageEvent<OcrRequest | { warm: true }>) => {
   const request = e.data;
   if ("warm" in request) {
@@ -91,7 +93,12 @@ self.onmessage = (e: MessageEvent<OcrRequest | { warm: true }>) => {
     service().catch((err) => self.postMessage({ id: 0, ok: false, error: err instanceof Error ? err.message : String(err), init: true } satisfies OcrResponse));
     return;
   }
-  if (next) self.postMessage({ id: next.id, ok: false, error: "superseded" } satisfies OcrResponse);
+  if (request.id < newest) {
+    supersede(request);
+    return running;
+  }
+  newest = request.id;
+  if (next) supersede(next);
   next = request;
   running ??= (async () => {
     for (let r: OcrRequest | null = next; r; r = next) {

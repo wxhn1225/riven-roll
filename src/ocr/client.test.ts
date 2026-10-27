@@ -55,6 +55,20 @@ it("starts a fresh worker after the reader failed to load, so the next screensho
   await expect(second).resolves.toMatchObject({ width: 1 });
 });
 
+it("numbers pictures in the order they were chosen, though a later one is read first", async () => {
+  const { recognize } = await import("./client");
+  const slow = Promise.withResolvers<ArrayBuffer>();
+  const quick = Promise.withResolvers<ArrayBuffer>();
+  void recognize({ arrayBuffer: () => slow.promise } as Blob).catch(() => {});
+  void recognize({ arrayBuffer: () => quick.promise } as Blob).catch(() => {});
+  quick.resolve(new ArrayBuffer(4));
+  const w = await nthWorker(1);
+  await posted(w, 1);
+  slow.resolve(new ArrayBuffer(4));
+  await posted(w, 2);
+  expect(w.posted.map((r) => r.id)).toEqual([2, 1]);
+});
+
 it("keeps the worker when a picture simply could not be read", async () => {
   const { recognize } = await import("./client");
   const first = recognize(picture());

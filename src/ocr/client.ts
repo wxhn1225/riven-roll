@@ -48,8 +48,9 @@ export interface OcrResult {
 }
 
 export async function recognize(file: Blob): Promise<OcrResult> {
-  const image = await file.arrayBuffer();
+  // numbered when chosen: an earlier picture can take longer to read
   const id = nextId++;
+  const image = await file.arrayBuffer();
   const res = await new Promise<OcrResponse>((resolve) => {
     try {
       const active = getWorker();

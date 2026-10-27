@@ -95,6 +95,29 @@ it("keeps only the newest screenshot waiting and answers the ones it replaces as
   expect(scope.postMessage.mock.calls[0][0]).toEqual({ id: 2, ok: false, error: "superseded" });
 });
 
+it("drops a screenshot that arrives after a newer one, keeping the newer one waiting", async () => {
+  let finish: ((value: { results: [] }) => void) | undefined;
+  mocks.recognize.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const first = scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  await vi.waitFor(() => expect(mocks.recognize).toHaveBeenCalledTimes(1));
+  // the third picture was read first; the second one comes late
+  scope.onmessage({ data: { id: 3, image: new ArrayBuffer(1) } });
+  scope.onmessage({ data: { id: 2, image: new ArrayBuffer(1) } });
+  expect(scope.postMessage.mock.calls.map(([message]) => [message.id, message.ok])).toEqual([[2, false]]);
+  finish?.({ results: [] });
+  await first;
+  expect(scope.postMessage.mock.calls.map(([message]) => [message.id, message.ok])).toEqual([
+    [2, false],
+    [1, true],
+    [3, true],
+  ]);
+});
+
 it("does not retain a synchronously failed initialization promise", async () => {
   mocks.initialize.mockImplementationOnce(() => {
     throw new Error("initialization threw");
