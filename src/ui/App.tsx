@@ -5,7 +5,7 @@ import { whyUnreachable } from "../engine/diagnose";
 import { formatDisplay, LAYOUTS, layoutKey, setDisposition } from "../engine/formula";
 import { poolFor } from "../engine/pool";
 import { fmtKuva, HTML_LANG, LANG_LABEL, strings } from "../i18n";
-import { recognize, warmOcr } from "../ocr/client";
+import { type OcrModel, recognize, warmOcr, watchOcrModel } from "../ocr/client";
 import type { ParsedCard } from "../ocr/parse";
 import {
   afterKeep,
@@ -213,6 +213,8 @@ export function App() {
   const weapon = session.weaponId ? weaponById(session.weaponId) : undefined;
   const [shot, setShot] = useState<Shot | null>(null);
   const [ocr, setOcr] = useState<OcrStatus>({ kind: "idle" });
+  const [ocrModel, setOcrModel] = useState<OcrModel | null>(null);
+  useEffect(() => watchOcrModel(setOcrModel), []);
   const [toast, setToast] = useState<string | null>(null);
   // the last one-click change that is easy to hit by mistake, the session (and comparison) before it; any later
   // change of the session retires it, so undoing never takes back an edit made after it
@@ -222,7 +224,6 @@ export function App() {
   const [compare, setCompare] = useState<Comparison | null>(null);
   const [plan, setPlan] = useState<PlanView>({ kind: "idle", reason: "" });
   const [sortBy, setSortBy] = useState<SortKey>(() => (session.target.objective === "cycles" ? "cycles" : "kuva"));
-  const ocrRuns = useRef(0);
   const ocrId = useRef(0);
   const file = useRef<HTMLInputElement>(null);
   const shotUrl = shot?.url;
@@ -289,13 +290,12 @@ export function App() {
       const id = ++ocrId.current;
       const url = URL.createObjectURL(f);
       setShot({ url, crop: null });
-      setOcr({ kind: "busy", first: ocrRuns.current === 0 });
+      setOcr({ kind: "busy" });
       setCompare(null);
       if (location.hash && !location.hash.startsWith("#/coach")) location.hash = "";
       try {
         const [{ screen, ms, width, height }, shotKey] = await Promise.all([recognize(f), imageKey(f)]);
         if (id !== ocrId.current) return;
-        ocrRuns.current++;
         const crop = cardCrop(screen.cards, width, height);
         setShot((old) => (old?.url === url ? { url, crop } : old));
         setOcr({ kind: "done", ms });
@@ -497,6 +497,7 @@ export function App() {
               pool={pool}
               shot={shot}
               ocr={ocr}
+              model={ocrModel}
               barFor={barFor}
               onPick={pick}
               onWeapon={setWeapon}

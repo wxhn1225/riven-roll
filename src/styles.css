@@ -858,6 +858,20 @@ input.num::placeholder {
   font-size: 12.5px;
   color: var(--ink-3);
 }
+.shot-bar {
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--rule);
+  overflow: hidden;
+}
+.shot-bar i {
+  display: block;
+  height: 100%;
+  background: #e0a33a;
+  transition: width 0.2s;
+}
 .shot-status.warn {
   padding: 3px 10px;
   border-radius: 14px;

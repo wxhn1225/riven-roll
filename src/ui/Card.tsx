@@ -4,6 +4,7 @@ import { formatDisplay, signedDisplayInput } from "../engine/formula";
 import type { Pool } from "../engine/pool";
 import { nameMatches, searchForm } from "../hant";
 import type { Strings } from "../i18n";
+import type { OcrModel } from "../ocr/client";
 import { type CardDraft, cardLayout, fillLayout, plannedRoll, readQuality, type Session, shownRange, type TraitDraft } from "../state";
 import { DispositionField, NumberField } from "./controls";
 import { KuvaIcon, RivenMark, WeaponImage } from "./icons";
@@ -16,7 +17,10 @@ export interface Shot {
 }
 
 /** An error is kept as what went wrong, not as text, so it follows a language switch. */
-export type OcrStatus = { kind: "idle" } | { kind: "busy"; first: boolean } | { kind: "done"; ms: number } | { kind: "error"; why: "noCard" | "failed" | "load" };
+export type OcrStatus = { kind: "idle" } | { kind: "busy" } | { kind: "done"; ms: number } | { kind: "error"; why: "noCard" | "failed" | "load" };
+
+const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
+const percent = (p: { loaded: number; total: number }) => Math.floor((p.loaded / p.total) * 100);
 
 interface Props {
   s: Strings;
@@ -25,6 +29,8 @@ interface Props {
   pool: Pool | null;
   shot: Shot | null;
   ocr: OcrStatus;
+  /** how far the screenshot reader has got */
+  model: OcrModel | null;
   /** roll bar of a wanted stat for the card's layout, or null when the stat isn't wanted */
   barFor: (tag: string) => number | null;
   onPick: () => void;
@@ -36,15 +42,20 @@ interface Props {
   onDisposition: (d: number) => void;
 }
 
-export function Card({ s, session, cls, pool, shot, ocr, barFor, onPick, onWeapon, onCard, onKuva, onDemo, onClear, onDisposition }: Props) {
+export function Card({ s, session, cls, pool, shot, ocr, model, barFor, onPick, onWeapon, onCard, onKuva, onDemo, onClear, onDisposition }: Props) {
   const { lang, card } = session;
   const layout = cardLayout(card);
   const [zoom, setZoom] = useState(false);
+  // while a screenshot waits, what the reader is doing: downloading its files (how far), loading them, or reading
+  const downloading = ocr.kind === "busy" && (model == null || model.phase === "download");
+  const progress = ocr.kind === "busy" && model?.phase === "download" ? model : null;
   const status =
     ocr.kind === "busy"
-      ? ocr.first
-        ? s.card.loading
-        : s.card.reading
+      ? downloading
+        ? s.card.downloading
+        : model?.phase === "load"
+          ? s.card.loading
+          : s.card.reading
       : ocr.kind === "done"
         ? s.card.readIn((ocr.ms / 1000).toFixed(1))
         : ocr.kind === "error"
@@ -151,6 +162,12 @@ export function Card({ s, session, cls, pool, shot, ocr, barFor, onPick, onWeapo
             {status && (
               <span className={`shot-status${ocr.kind === "error" ? " warn" : ocr.kind === "busy" ? " busy" : ""}`} aria-live="polite">
                 {status}
+                {downloading && (progress ? <span aria-hidden="true"> {s.card.downloaded(mb(progress.loaded), mb(progress.total), percent(progress))}</span> : "…")}
+                {progress && (
+                  <span className="shot-bar" role="progressbar" aria-label={s.card.downloading} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent(progress)}>
+                    <i style={{ width: `${percent(progress)}%` }} />
+                  </span>
+                )}
               </span>
             )}
             <button type="button" className="shot-again" onClick={onPick}>

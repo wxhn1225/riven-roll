@@ -1,22 +1,45 @@
-import type { OcrRequest, OcrResponse } from "./ocr.worker";
+import type { OcrMessage, OcrModel, OcrRequest, OcrResponse } from "./ocr.worker";
 import { type ParsedScreen, parseScreen } from "./parse";
+
+export type { OcrModel };
 
 let worker: Worker | null = null;
 let nextId = 1;
 const pending = new Map<number, (r: OcrResponse) => void>();
 
+/** how far the reader has got; null before a worker has said anything */
+let model: OcrModel | null = null;
+const watchers = new Set<(model: OcrModel | null) => void>();
+const setModel = (next: OcrModel | null) => {
+  model = next;
+  for (const watch of watchers) watch(next);
+};
+
+/** Follow how far the reader has got (downloading, loading, ready); returns the way to stop. */
+export function watchOcrModel(watch: (model: OcrModel | null) => void): () => void {
+  watchers.add(watch);
+  watch(model);
+  return () => watchers.delete(watch);
+}
+
 function getWorker() {
   if (!worker) {
     const active = new Worker(new URL("./ocr.worker.ts", import.meta.url), { type: "module" });
     worker = active;
+    setModel(null);
     const failed = (message: string) => {
       if (worker !== active) return;
       worker = null;
       active.terminate();
+      setModel(null);
       for (const [id, resolve] of pending) resolve({ id, ok: false, error: message, init: true });
       pending.clear();
     };
-    active.onmessage = (e: MessageEvent<OcrResponse>) => {
+    active.onmessage = (e: MessageEvent<OcrMessage>) => {
+      if ("model" in e.data) {
+        if (worker === active) setModel(e.data.model);
+        return;
+      }
       pending.get(e.data.id)?.(e.data);
       pending.delete(e.data.id);
       // the runtime did not load: its failure stays in this worker, so the next screenshot gets a new one
