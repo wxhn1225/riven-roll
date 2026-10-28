@@ -14,6 +14,7 @@ import v3_105 from "./fixtures/v3_105_compare.json";
 import v3_end from "./fixtures/v3_end.json";
 import zh_amanata from "./fixtures/zh_amanata_photo.json";
 import zh_okina from "./fixtures/zh_okina.json";
+import zh_verglas from "./fixtures/zh_verglas_comma.json";
 import { parseScreen } from "./parse";
 
 const EPITAPH_PRIME = "/Lotus/Weapons/Tenno/Pistols/PrimeEpitaph/PrimeEpitaphSidearmWeapon";
@@ -128,17 +129,33 @@ describe("parseScreen on 国服 screenshots", () => {
     expect([card.mr, card.cycles, card.layout]).toEqual([15, 59, { pos: 3, neg: 1 }]);
   });
 
+  it("finds a two-character weapon read one character off, in a screenshot with decimal commas", () => {
+    // 冰凇 reads as 冰松
+    const s = parseScreen(zh_verglas.items, zh_verglas.width);
+    expect(s.weaponId).toBe("/Lotus/Types/Sentinels/SentinelWeapons/SentinelFreezeRayRifle");
+    const card = s.cards[0];
+    expect(card.traits.map(brief)).toEqual(["+CritDamage:135.3", "+CritChance:158.3", "+ReloadSpeed:56.9", "-FactionDamageInfested:0.61"]);
+    expect([card.mr, card.cycles, card.layout]).toEqual([8, 143, { pos: 3, neg: 1 }]);
+  });
+
   it("leaves the weapon out when a character off could be either of two weapons", () => {
+    // the title read as `text`, without its second line ("loctitox")
     const title = (text: string) =>
       parseScreen(
-        zh_amanata.items.map((i) => (i.text === "天雍刀Acrg-" ? { ...i, text } : i)),
+        zh_amanata.items.flatMap((i) => (i.text === "天雍刀Acrg-" ? [{ ...i, text }] : i.text === "loctitox" ? [] : [i])),
         zh_amanata.width,
       ).weaponId;
     // 苍穹双剑 and 苍穹之剑 are both one character from 苍穹乙剑
     expect(title("苍穹双剑Acrg-")).not.toBeNull();
     expect(title("苍穹乙剑Acrg-")).toBeNull();
-    // two characters are too few to guess from
+    // 绝路 and 绝望 are both one character from 绝露
     expect(title("绝露Acrg-")).toBeNull();
+    // only right before the riven's Latin name: not on its own, nor before a Chinese one
+    expect(title("冰松Acrg-")).not.toBeNull();
+    expect(title("冰松")).toBeNull();
+    expect(title("冰松分裂")).toBeNull();
+    // one character is too few to guess from
+    expect(title("鹅Acrg-")).toBeNull();
   });
 
   it("does not invent values the chat window covers", () => {

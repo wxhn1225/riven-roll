@@ -341,12 +341,15 @@ export function parseScreen(items: OcrItem[], width: number): ParsedScreen {
       }
     if (weaponId) break;
   }
-  // a rare character the reader has no glyph for comes out as another (天薙刀 as 天雍刀): a title that starts with a Chinese
-  // name of three or more characters but for one of them names that weapon, when no other weapon is that close
+  // a character read wrong (天薙刀 as 天雍刀, 冰凇 as 冰松): a title that starts with a Chinese name of two or more
+  // characters but for one of them, right before the riven's own Latin name, names that weapon when no other weapon is
+  // that close
   if (!weaponId)
     for (const title of titles) {
       const t = foldOcr(squash(title));
-      const near = new Set(weaponNames.filter((w) => w.folded.length >= 3 && oneHanOff(t.slice(0, w.folded.length), w.folded)).map((w) => w.id));
+      const near = new Set(
+        weaponNames.filter((w) => w.folded.length >= 2 && /[a-z]/.test(t[w.folded.length] ?? "") && oneHanOff(t.slice(0, w.folded.length), w.folded)).map((w) => w.id),
+      );
       if (near.size === 1) {
         weaponId = [...near][0];
         break;
