@@ -41,7 +41,18 @@ export interface RouteStats {
 }
 
 export type PlanResponse =
-  | { id: number; ok: true; done: boolean; reachable: boolean; routes: RouteStats[]; states: number; ms: number; compareValues: number[] }
+  | {
+      id: number;
+      ok: true;
+      done: boolean;
+      reachable: boolean;
+      routes: RouteStats[];
+      states: number;
+      ms: number;
+      compareValues: number[];
+      /** For each compared card, the negative that alone keeps it from the target, or null. */
+      compareNeg: (string | null)[];
+    }
   | { id: number; ok: false; error: string };
 
 type Success = Extract<PlanResponse, { ok: true }>;
@@ -149,7 +160,7 @@ export class Planner {
     const stateKey = (card: Card) => states.stateOf(card).key;
     // a card that already meets the target needs no plan: a quick check, not a full solve
     if (!req.compare?.length && states.isGoal(states.stateOf(req.card)))
-      return { id: req.id, ok: true, done: true, reachable: true, routes: [], states: states.stateCount, ms: performance.now() - started, compareValues: [] };
+      return { id: req.id, ok: true, done: true, reachable: true, routes: [], states: states.stateCount, ms: performance.now() - started, compareValues: [], compareNeg: [] };
     // past the discounted cycles the count no longer changes any price: one plan (and one simulation) serves them all
     const priced = Math.min(req.cyclesDone, DISCOUNTED_CYCLES);
     const modelKey = JSON.stringify([req.weaponId, req.target, req.objective, seen]);
@@ -190,6 +201,13 @@ export class Planner {
       const { solver, start } = solve(req.card);
       values.set(current, solver.value[start.id]);
       const compareValues = compare.map((key) => values.get(key) as number);
+      // a compared card that would meet the target if its negative were accepted
+      const compareNeg = (req.compare ?? []).map((card) => {
+        const neg = card.neg?.tag;
+        if (!neg || req.target.groups.some((g) => g.tags.includes(neg)) || states.isGoal(states.stateOf(card))) return null;
+        const accepting = new Solver(pool, { ...req.target, allowedNeg: [...req.target.allowedNeg, neg] }, req.objective);
+        return accepting.isGoal(accepting.stateOf(card)) ? neg : null;
+      });
       const done = solver.isGoal(start);
       const reachable = Number.isFinite(solver.value[start.id]);
       const samples: Float64Array[] = [];
@@ -215,7 +233,7 @@ export class Planner {
       this.cached = {
         key,
         samples,
-        response: { id: req.id, ok: true, done, reachable, routes: stats, states: solver.stateCount, ms: 0, compareValues },
+        response: { id: req.id, ok: true, done, reachable, routes: stats, states: solver.stateCount, ms: 0, compareValues, compareNeg },
       };
     }
     const cached = this.cached;

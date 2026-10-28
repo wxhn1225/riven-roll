@@ -221,6 +221,8 @@ export function strings(l: Lang) {
         saves: (n: string) => `saves ≈ ${n}`,
         cycles: (n: string) => `${n} cycles`,
         savesCycles: (n: string) => `saves ≈ ${n} cycles`,
+        even: "either one leaves as much to do",
+        negNotOk: (stat: string) => `Has every wanted stat, but the negative ${stat} is not accepted in the target`,
       },
       ranges: {
         title: "Stat ranges",
@@ -435,6 +437,8 @@ export function strings(l: Lang) {
         saves: (n: string) => `少花約 ${n}`,
         cycles: (n: string) => `${n} 次`,
         savesCycles: (n: string) => `少循環約 ${n} 次`,
+        even: "留哪張都一樣",
+        negNotOk: (stat: string) => `想要的詞條都有了，但目標不接受負面「${stat}」`,
       },
       ranges: {
         title: "詞條範圍",
@@ -648,6 +652,8 @@ export function strings(l: Lang) {
       saves: (n: string) => `少花约 ${n}`,
       cycles: (n: string) => `${n} 次`,
       savesCycles: (n: string) => `少循环约 ${n} 次`,
+      even: "留哪张都一样",
+      negNotOk: (stat: string) => `想要的词条都有了，但目标不接受负面「${stat}」`,
     },
     ranges: {
       title: "词条范围",

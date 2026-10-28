@@ -1619,6 +1619,11 @@ dialog.lightbox img {
 .compare-line.neg {
   color: var(--seal);
 }
+.compare-note {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--seal);
+}
 .compare-card .btn {
   margin-top: 8px;
   pointer-events: none;

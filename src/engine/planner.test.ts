@@ -3,7 +3,7 @@ import { GAME, statOf } from "./data";
 import { LAYOUTS, qualityFromDisplay } from "./formula";
 import { Planner, type PlanRequest, type PlanResponse, WORK_BUDGET } from "./planner";
 import { poolFor } from "./pool";
-import { Solver, TOO_COMPLEX, TooComplexError, WorkAccount } from "./solver";
+import { type Card, Solver, type Target, TOO_COMPLEX, TooComplexError, WorkAccount } from "./solver";
 
 const weapon = GAME.weapons.find((w) => w.name.en === "Braton");
 if (!weapon) throw new Error("missing Braton");
@@ -61,6 +61,25 @@ it("keeps exact cycle expectations and Kuva amounts in their own units", () => {
   }
   expect(result.compareValues[0]).toBe(result.compareValues[1]);
   expect(result.compareValues[0]).toBeLessThan(100);
+});
+
+it("names the negative that alone keeps a compared card from the target", () => {
+  const traits = (third: string) => ["WeaponCritChanceMod", "WeaponFireDamageMod", third].map((tag) => ({ tag, w: 1 }));
+  const old: Card = { layout: { pos: 3, neg: 1 }, pos: traits("WeaponFreezeDamageMod"), neg: { tag: "WeaponRecoilReductionMod", w: 1 }, spliced: null };
+  const fresh: Card = { ...old, pos: traits("WeaponToxinDamageMod"), neg: { tag: "WeaponReloadSpeedMod", w: 1 } };
+  const target: Target = {
+    groups: ["WeaponCritChanceMod", "WeaponFireDamageMod", "WeaponToxinDamageMod"].map((tag) => ({ tags: [tag], minW: 0.9 })),
+    layouts: [{ pos: 3, neg: 1 }],
+    allowedNeg: ["WeaponRecoilReductionMod"],
+  };
+  const result = new Planner(() => 0.5).plan({ ...request, card: old, target, compare: [old, fresh] });
+  if (!result.ok) throw new Error(result.error);
+  expect(result.compareNeg).toEqual([null, "WeaponReloadSpeedMod"]);
+  // accepted, the new card is done
+  const accepted = new Planner(() => 0.5).plan({ ...request, card: old, target: { ...target, allowedNeg: [...target.allowedNeg, "WeaponReloadSpeedMod"] }, compare: [old, fresh] });
+  if (!accepted.ok) throw new Error(accepted.error);
+  expect(accepted.compareNeg).toEqual([null, null]);
+  expect(accepted.compareValues[1]).toBe(0);
 });
 
 it.each([{ runs: 0 }, { runs: Number.NaN }, { cyclesDone: -1 }, { cyclesDone: 1.5 }, { budget: Number.POSITIVE_INFINITY }, { budget: -1 }])(

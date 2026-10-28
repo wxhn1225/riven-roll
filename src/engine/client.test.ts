@@ -23,7 +23,7 @@ class FakeWorker {
   }
   finish(index = 0) {
     const req = this.posted[index];
-    this.onmessage?.({ data: { id: req.id, ok: true, done: true, reachable: true, routes: [], states: 1, ms: 1, compareValues: [] } });
+    this.onmessage?.({ data: { id: req.id, ok: true, done: true, reachable: true, routes: [], states: 1, ms: 1, compareValues: [], compareNeg: [] } });
   }
   fail() {
     this.onerror?.({ message: "boom", preventDefault: () => {} });

@@ -180,7 +180,8 @@ function cardCrop(cards: ParsedCard[], width: number, height: number): Shot["cro
  * has this cycle's price taken off. */
 interface Comparison {
   cards: [ParsedCard, ParsedCard];
-  values: number[] | null;
+  /** what keeping each card leaves to do, and the negative that alone keeps it from the target */
+  worked: { values: number[]; negs: (string | null)[] } | null;
   ids: string[];
   kuvaShown: boolean;
 }
@@ -313,7 +314,7 @@ export function App() {
         });
         if (cards.length >= 2 && c) {
           const pair: [ParsedCard, ParsedCard] = [cards[0], cards[cards.length - 1]];
-          setCompare({ cards: pair, values: null, ids: compareIds(pair, shotKey), kuvaShown: screen.kuva != null });
+          setCompare({ cards: pair, worked: null, ids: compareIds(pair, shotKey), kuvaShown: screen.kuva != null });
         } else if (!cards.length) setOcr({ kind: "error", why: "noCard" });
       } catch (err) {
         // the reader did not load (the next paste tries again with a fresh one), or it could not read this picture
@@ -385,7 +386,7 @@ export function App() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: planKey captures every input
   useEffect(() => {
     const id = ++runId.current;
-    setCompare((c) => (c?.values ? { ...c, values: null } : c));
+    setCompare((c) => (c?.worked ? { ...c, worked: null } : c));
     // nothing to plan: what is still being worked out for an older input is stopped
     const idle = (reason: string) => {
       cancelPlans();
@@ -412,7 +413,7 @@ export function App() {
       });
       if (id !== runId.current) return;
       if (!r.ok) return setPlan({ kind: "error", code: r.error });
-      if (compareCards) setCompare((c) => (c ? { ...c, values: r.compareValues } : c));
+      if (compareCards) setCompare((c) => (c ? { ...c, worked: { values: r.compareValues, negs: r.compareNeg } } : c));
       if (r.done) return setPlan({ kind: "done" });
       if (!r.reachable || !r.routes.length) return setPlan({ kind: "unreachable", why: whyUnreachable(engineCard, engineTarget, pool ?? undefined) });
       setPlan({ kind: "ok", routes: r.routes, ms: r.ms });
@@ -537,7 +538,8 @@ export function App() {
                 lang={lang}
                 cls={cls}
                 cards={compare.cards}
-                values={compare.values}
+                values={compare.worked?.values ?? null}
+                negs={compare.worked?.negs ?? []}
                 objective={session.target.objective}
                 fmt={(n) => fmtKuva(n, lang, true)}
                 onKeep={onKeep}

@@ -3,28 +3,30 @@ import { formatDisplay } from "../engine/formula";
 import type { Objective } from "../engine/solver";
 import type { Strings } from "../i18n";
 import type { ParsedCard } from "../ocr/parse";
-import { remapTag } from "../state";
+import { remapTag, statName } from "../state";
 import { KuvaIcon, StatIcon } from "./icons";
 
-/** Old/new cards from the cycle confirmation screen, with the better one marked. */
+/** Old/new cards from the cycle confirmation screen, with the better one marked, or neither when they are even. */
 export function Compare(props: {
   s: Strings;
   lang: Lang;
   cls: RivenClass;
   cards: [ParsedCard, ParsedCard];
   values: number[] | null;
+  negs: (string | null)[];
   objective: Objective;
   fmt: (n: number) => string;
   onKeep: (which: 0 | 1) => void;
 }) {
-  const { s, lang, cls, cards, values, objective, fmt, onKeep } = props;
+  const { s, lang, cls, cards, values, negs, objective, fmt, onKeep } = props;
   const cycles = objective === "cycles";
-  const better = values ? (values[1] < values[0] - 1e-9 ? 1 : 0) : null;
+  const better = !values ? null : values[1] < values[0] - 1e-9 ? 1 : values[0] < values[1] - 1e-9 ? 0 : null;
   const diff = values ? Math.abs(values[0] - values[1]) : 0;
   return (
     <section className="panel compare" aria-label={s.compare.title}>
       <header className="panel-h">
         <h2>{s.compare.title}</h2>
+        {values && better == null && <span className="muted">{s.compare.even}</span>}
         {values && diff > 1 && (
           <span className="muted with-ico">
             {!cycles && <KuvaIcon label={s.kuva} />}
@@ -57,6 +59,7 @@ export function Compare(props: {
                 </span>
               );
             })}
+            {values && negs[i] && <span className="compare-note">{s.compare.negNotOk(statName(cls, negs[i], lang))}</span>}
             <span className={`btn${better === i ? " primary" : ""}`}>{s.compare.keep(i === 0 ? s.compare.old : s.compare.new)}</span>
           </button>
         ))}
