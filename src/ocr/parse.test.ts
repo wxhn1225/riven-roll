@@ -19,6 +19,12 @@ import { parseScreen } from "./parse";
 
 const EPITAPH_PRIME = "/Lotus/Weapons/Tenno/Pistols/PrimeEpitaph/PrimeEpitaphSidearmWeapon";
 const brief = (t: { tag: string; shown: number | null; curse: boolean }) => `${t.curse ? "-" : "+"}${t.tag.replace(/^Weapon|Mod$/g, "")}:${t.shown}`;
+/** the weapon found in the 天薙刀 photo with its title read as `text`, without its second line ("loctitox") */
+const title = (text: string) =>
+  parseScreen(
+    zh_amanata.items.flatMap((i) => (i.text === "天雍刀Acrg-" ? [{ ...i, text }] : i.text === "loctitox" ? [] : [i])),
+    zh_amanata.width,
+  ).weaponId;
 
 describe("parseScreen on 国服 screenshots", () => {
   it("reads a single card with weapon, MR, cycles, kuva and price", () => {
@@ -139,23 +145,25 @@ describe("parseScreen on 国服 screenshots", () => {
   });
 
   it("leaves the weapon out when a character off could be either of two weapons", () => {
-    // the title read as `text`, without its second line ("loctitox")
-    const title = (text: string) =>
-      parseScreen(
-        zh_amanata.items.flatMap((i) => (i.text === "天雍刀Acrg-" ? [{ ...i, text }] : i.text === "loctitox" ? [] : [i])),
-        zh_amanata.width,
-      ).weaponId;
     // 苍穹双剑 and 苍穹之剑 are both one character from 苍穹乙剑
     expect(title("苍穹双剑Acrg-")).not.toBeNull();
     expect(title("苍穹乙剑Acrg-")).toBeNull();
     // 绝路 and 绝望 are both one character from 绝露
     expect(title("绝露Acrg-")).toBeNull();
-    // only right before the riven's Latin name: not on its own, nor before a Chinese one
+    // two characters only right before the riven's Latin name: not on its own, nor before a Chinese one
     expect(title("冰松Acrg-")).not.toBeNull();
     expect(title("冰松")).toBeNull();
     expect(title("冰松分裂")).toBeNull();
     // one character is too few to guess from
     expect(title("鹅Acrg-")).toBeNull();
+  });
+
+  it("finds a weapon read one character off before a 国服 riven name", () => {
+    expect(title("天雍刀 重伤 剑风·异变")).toBe("/Lotus/Weapons/Tenno/Melee/Polearms/Naginata/ShrineMaidenNaginataWeapon");
+    expect(title("天雍刀 重伤·异变")).toBe("/Lotus/Weapons/Tenno/Melee/Polearms/Naginata/ShrineMaidenNaginataWeapon");
+    // 雷克斯 and 雷克斯双枪 are both one character off; the longer name wins
+    expect(title("雷克期双枪Acrg-")).toBe("/Lotus/Weapons/Tenno/Akimbo/AkLexPistols");
+    expect(title("雷克期 重伤 剑风·异变")).toBe("/Lotus/Weapons/Tenno/Pistol/HeavyPistol");
   });
 
   it("does not invent values the chat window covers", () => {

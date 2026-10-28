@@ -341,17 +341,17 @@ export function parseScreen(items: OcrItem[], width: number): ParsedScreen {
       }
     if (weaponId) break;
   }
-  // a character read wrong (天薙刀 as 天雍刀, 冰凇 as 冰松): a title that starts with a Chinese name of two or more
-  // characters but for one of them, right before the riven's own Latin name, names that weapon when no other weapon is
-  // that close
+  // a character read wrong (天薙刀 as 天雍刀, 冰凇 as 冰松): a title that starts with a Chinese name but for one character
+  // names that weapon, the longest such name (雷克斯双枪 over 雷克斯) when no other weapon of that length is as close;
+  // a two-character name only right before the riven's own Latin name
   if (!weaponId)
     for (const title of titles) {
       const t = foldOcr(squash(title));
-      const near = new Set(
-        weaponNames.filter((w) => w.folded.length >= 2 && /[a-z]/.test(t[w.folded.length] ?? "") && oneHanOff(t.slice(0, w.folded.length), w.folded)).map((w) => w.id),
-      );
-      if (near.size === 1) {
-        weaponId = [...near][0];
+      const near = weaponNames.filter((w) => (w.folded.length >= 3 || (w.folded.length === 2 && /[a-z]/.test(t[2] ?? ""))) && oneHanOff(t.slice(0, w.folded.length), w.folded));
+      const longest = Math.max(0, ...near.map((w) => w.folded.length));
+      const ids = new Set(near.filter((w) => w.folded.length === longest).map((w) => w.id));
+      if (ids.size === 1) {
+        weaponId = [...ids][0];
         break;
       }
     }
