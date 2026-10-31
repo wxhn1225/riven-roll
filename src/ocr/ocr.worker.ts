@@ -65,15 +65,17 @@ async function openStore(): Promise<Cache | null> {
   }
 }
 
-/** A part kept from an earlier visit; one that cannot be read, or is not whole, is downloaded again. */
-async function keptPart(store: Cache | null, part: Part): Promise<Uint8Array | null> {
-  if (!store) return null;
+/** Puts a part kept from an earlier visit in its place in its file; one that cannot be read, or is not whole, is downloaded again. */
+async function readKept(store: Cache | null, part: Part, file: Uint8Array): Promise<boolean> {
+  if (!store) return false;
   try {
     const hit = await store.match(part.url);
     const bytes = hit ? new Uint8Array(await hit.arrayBuffer()) : null;
-    return bytes?.length === part.size ? bytes : null;
+    if (bytes?.length !== part.size) return false;
+    file.set(bytes, part.at);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -93,30 +95,31 @@ class Gone extends Error {}
 
 const pause = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    const cancel = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", cancel);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", cancel, { once: true });
   });
 
 /**
  * The reader's files: the parts kept from earlier visits, and the rest downloaded a few at a time, each kept as it
  * arrives. A part that fails or stalls is fetched again until it comes; one the site no longer has stops the others.
+ * `saved`: done once every part downloaded is in the store.
  */
-async function download(store: Cache | null): Promise<Record<FileKey, ArrayBuffer>> {
+async function download(store: Cache | null): Promise<{ files: Record<FileKey, ArrayBuffer>; saved: Promise<unknown> }> {
   const files = Object.fromEntries(Object.entries(SIZES).map(([key, size]) => [key, new Uint8Array(size)])) as Record<FileKey, Uint8Array<ArrayBuffer>>;
-  const kept = await Promise.all(PARTS.map((part) => keptPart(store, part)));
-  const missing = PARTS.filter((part, i) => {
-    const bytes = kept[i];
-    if (bytes) files[part.key].set(bytes, part.at);
-    return !bytes;
+  const kept = await Promise.all(PARTS.map((part) => readKept(store, part, files[part.key])));
+  const missing = PARTS.filter((_, i) => !kept[i]);
+  const saves: Promise<unknown>[] = [];
+  const whole = () => ({
+    files: Object.fromEntries(Object.entries(files).map(([key, bytes]) => [key, bytes.buffer])) as Record<FileKey, ArrayBuffer>,
+    saved: Promise.all(saves),
   });
-  const whole = () => Object.fromEntries(Object.entries(files).map(([key, bytes]) => [key, bytes.buffer])) as Record<FileKey, ArrayBuffer>;
   if (!missing.length) return whole();
 
   const total = PARTS.reduce((a, part) => a + part.size, 0);
@@ -175,7 +178,7 @@ async function download(store: Cache | null): Promise<Record<FileKey, ArrayBuffe
         got.delete(part);
         finished += part.size;
         files[part.key].set(bytes, part.at);
-        store?.put(part.url, new Response(bytes)).catch(() => {});
+        if (store) saves.push(store.put(part.url, new Response(bytes)).catch(() => {}));
         return;
       } catch (err) {
         if (stop.signal.aborted || err instanceof Gone) throw err;
@@ -213,7 +216,7 @@ function service() {
   ready ??= Promise.resolve()
     .then(async () => {
       const store = await openStore();
-      const files = await download(store);
+      const { files, saved } = await download(store);
       report({ phase: "load" });
       ort.env.wasm.wasmBinary = files.wasm;
       const s = new PaddleOcrService({
@@ -228,7 +231,10 @@ function service() {
       } catch (err) {
         await s.destroy().catch(() => {});
         // a kept part may be what it could not load from: next time every part is downloaded again
-        if (store) await forget(store);
+        if (store) {
+          await saved;
+          await forget(store);
+        }
         throw err;
       }
     })

@@ -30,7 +30,10 @@ const readerParts = Object.fromEntries(
   }),
 );
 
-/** Serves the reader's parts from the dev server and writes them into the build. */
+/**
+ * Serves the reader's parts from the dev server and writes them into the build, without the runtime as one file: the
+ * reader is handed it from its parts, so it is never fetched.
+ */
 const serveReaderParts = (): Plugin => ({
   name: "reader-parts",
   configureServer(server) {
@@ -42,8 +45,9 @@ const serveReaderParts = (): Plugin => ({
       res.end(part);
     });
   },
-  generateBundle() {
+  generateBundle(_, bundle) {
     for (const [fileName, source] of parts) this.emitFile({ type: "asset", fileName, source });
+    for (const fileName of Object.keys(bundle)) if (/ort-wasm-simd-threaded-[^/]*\.wasm$/.test(fileName)) delete bundle[fileName];
   },
 });
 

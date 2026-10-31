@@ -325,6 +325,54 @@ it("keeps fetching a part that fails, waiting longer each time, until it comes",
   expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 1, ok: true }));
 });
 
+it("leaves nothing listening once the waits between tries are over", async () => {
+  vi.useFakeTimers();
+  let listening = 0;
+  const add = AbortSignal.prototype.addEventListener;
+  const remove = AbortSignal.prototype.removeEventListener;
+  vi.spyOn(AbortSignal.prototype, "addEventListener").mockImplementation(function (this: AbortSignal, ...args: Parameters<typeof add>) {
+    if (args[0] === "abort") listening++;
+    return add.apply(this, args);
+  });
+  vi.spyOn(AbortSignal.prototype, "removeEventListener").mockImplementation(function (this: AbortSignal, ...args: Parameters<typeof remove>) {
+    if (args[0] === "abort") listening--;
+    return remove.apply(this, args);
+  });
+  let tries = 0;
+  vi.mocked(fetch).mockImplementation(async (url) => {
+    if (isRec(url) && ++tries <= 20) throw new TypeError("network error");
+    return new Response(served(url));
+  });
+  const done = scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  await vi.advanceTimersByTimeAsync(20 * reader.BACKOFF_MS[reader.BACKOFF_MS.length - 1]);
+  await done;
+  expect(tries).toBe(21);
+  expect(listening).toBe(0);
+  vi.restoreAllMocks();
+});
+
+it("lets the parts it downloaded be stored before it drops them for a reader that did not load", async () => {
+  const kept = memoryStore();
+  // the store takes a while to write
+  let open = () => {};
+  const writing = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  const put = kept.store.put;
+  kept.store.put = async (url: string, response: Response) => {
+    await writing;
+    return put(url, response);
+  };
+  vi.stubGlobal("caches", { open: kept.open });
+  mocks.initialize.mockRejectedValueOnce(new Error("not a model"));
+  setTimeout(open, 50);
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 1, ok: false, init: true }));
+  // once every write has landed
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(kept.files.size).toBe(0);
+});
+
 it("says the reader did not load when the site no longer has a part, and downloads again next time", async () => {
   vi.useFakeTimers();
   vi.mocked(fetch).mockImplementation(async (url, init) =>
