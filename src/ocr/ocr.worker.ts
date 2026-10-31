@@ -42,12 +42,15 @@ type FileKey = keyof typeof FILES;
 
 /**
  * Where the reader's files stay between visits, so they are downloaded once; named for this site, as other sites share its
- * origin. A file is kept under its address, which changes with its contents, so a kept file is never out of date; files an
- * earlier version used are deleted. Files are kept only once the reader has loaded from them, and dropped when it could not.
+ * origin. A file is kept under its address, which changes with its contents, so a kept file is never out of date. Files are
+ * kept only once the reader has loaded from them, and dropped when it could not; files other versions kept are deleted
+ * once this version's reader has loaded.
  */
 export const STORE = "riven-roll-reader";
 
 async function openStore(): Promise<Cache | null> {
+  // the dev server serves the files at addresses that stay the same when they change
+  if (import.meta.env.DEV) return null;
   try {
     return typeof caches === "undefined" ? null : await caches.open(STORE);
   } catch {
@@ -56,21 +59,26 @@ async function openStore(): Promise<Cache | null> {
   }
 }
 
-/** The files already kept, read back; the ones an earlier version kept are deleted on the way. */
+/** The files already kept, read back; one that cannot be read is downloaded. */
 async function keptFiles(store: Cache | null): Promise<Map<FileKey, ArrayBuffer>> {
   const kept = new Map<FileKey, ArrayBuffer>();
   if (!store) return kept;
-  try {
-    const wanted = new Set<string>(Object.values(FILES));
-    for (const request of await store.keys()) if (!wanted.has(request.url)) await store.delete(request);
-    for (const [key, url] of Object.entries(FILES) as [FileKey, string][]) {
+  for (const [key, url] of Object.entries(FILES) as [FileKey, string][]) {
+    try {
       const hit = await store.match(url);
       if (hit) kept.set(key, await hit.arrayBuffer());
+    } catch {
+      // read like a file never kept
     }
-  } catch {
-    // a store that cannot be read is no worse than an empty one
   }
   return kept;
+}
+
+/** Deletes the files other versions kept. */
+async function dropOthers(store: Cache) {
+  const wanted = new Set<string>(Object.values(FILES));
+  const others = (await store.keys()).filter((request) => !wanted.has(request.url));
+  await Promise.all(others.map((request) => store.delete(request)));
 }
 
 async function forget(store: Cache) {
@@ -184,7 +192,10 @@ function service() {
       });
       try {
         await s.initialize();
-        for (const [url, response] of fresh) store?.put(url, response).catch(() => {});
+        if (store) {
+          for (const [url, response] of fresh) store.put(url, response).catch(() => {});
+          dropOthers(store).catch(() => {});
+        }
         report({ phase: "ready" });
         return s;
       } catch (err) {

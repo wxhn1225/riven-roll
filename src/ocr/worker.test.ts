@@ -63,6 +63,8 @@ let reader: typeof import("./ocr.worker");
 beforeEach(async () => {
   vi.resetModules();
   vi.resetAllMocks();
+  // as built for the site: the dev server keeps nothing
+  vi.stubEnv("DEV", false);
   mocks.initialize.mockResolvedValue(undefined);
   mocks.destroy.mockResolvedValue(undefined);
   mocks.recognize.mockResolvedValue({ results: [] });
@@ -90,6 +92,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 type Posted = { id?: number; ok?: boolean; model?: { phase: string; loaded?: number; total?: number } };
@@ -175,18 +178,22 @@ it("downloads only the files not kept, and deletes the ones an earlier version k
   const total = Object.values(__READER_SIZES__).reduce((a, b) => a + b, 0);
   // the progress starts from what was kept
   expect(progress()[0]).toEqual(expect.objectContaining({ phase: "download", loaded: total - __READER_SIZES__.recognition, total }));
-  expect(kept.files.has(old)).toBe(false);
   await vi.waitFor(() => expect(kept.files.has(recognition)).toBe(true));
+  await vi.waitFor(() => expect(kept.files.has(old)).toBe(false));
   expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 2, ok: true }));
 });
 
 it("keeps nothing the reader could not load from, and drops kept files it could not load from", async () => {
   const kept = memoryStore();
   vi.stubGlobal("caches", { open: kept.open });
+  // what another version kept stays while this one cannot load
+  const other = "https://example.test/assets/PP-OCRv6_tiny_rec-other.ort";
+  kept.files.set(other, new ArrayBuffer(3));
   mocks.initialize.mockRejectedValueOnce(new Error("not a model"));
   await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
   expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 1, ok: false, init: true }));
-  expect(kept.files.size).toBe(0);
+  expect([...kept.files.keys()]).toEqual([other]);
+  kept.files.delete(other);
 
   // loaded fine and kept, then a later visit cannot load from what was kept
   await scope.onmessage({ data: { id: 2, image: new ArrayBuffer(1) } });
@@ -200,6 +207,38 @@ it("keeps nothing the reader could not load from, and drops kept files it could 
   await scope.onmessage({ data: { id: 4, image: new ArrayBuffer(1) } });
   expect(fetch).toHaveBeenCalledTimes(4);
   expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 4, ok: true }));
+});
+
+it("downloads only a kept file it cannot read, and reads the rest though the cleanup fails", async () => {
+  const kept = memoryStore();
+  vi.stubGlobal("caches", { open: kept.open });
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  await vi.waitFor(() => expect(kept.files.size).toBe(4));
+  const store = await kept.open();
+  const detection = [...kept.files.keys()].find((url) => url.endsWith("_det.ort")) as string;
+  const match = store.match;
+  store.match = async (url: string) => {
+    if (url === detection) throw new DOMException("unreadable", "UnknownError");
+    return match(url);
+  };
+  store.keys = async () => {
+    throw new DOMException("unreadable", "UnknownError");
+  };
+
+  await revisit();
+  await scope.onmessage({ data: { id: 2, image: new ArrayBuffer(1) } });
+  expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toEqual([detection]);
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 2, ok: true }));
+});
+
+it("keeps nothing from the dev server", async () => {
+  vi.stubEnv("DEV", true);
+  const kept = memoryStore();
+  vi.stubGlobal("caches", { open: kept.open });
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  expect(kept.open).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 1, ok: true }));
 });
 
 it("downloads as before when the browser will not keep files", async () => {
