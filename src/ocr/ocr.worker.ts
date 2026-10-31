@@ -2,23 +2,30 @@
 // Runs PaddleOCR (PP-OCRv6 tiny) on a screenshot entirely in the browser.
 // "onnxruntime-web" is aliased to its WASM-only build in vite.config.ts, shared with ppu-paddle-ocr
 import * as ort from "onnxruntime-web";
-import wasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import { PaddleOcrService } from "ppu-paddle-ocr/web";
-import detectionUrl from "./models/PP-OCRv6_tiny_det.ort?url";
-import recognitionUrl from "./models/PP-OCRv6_tiny_rec.ort?url";
-import dictionaryUrl from "./models/ppocrv6_tiny_dict.txt?url";
 import type { OcrItem } from "./parse";
 
-declare const __READER_SIZES__: Record<FileKey, number>;
+type FileKey = "wasm" | "detection" | "recognition" | "dictionary";
+declare const __READER_PARTS__: Record<FileKey, [string, number][]>;
 
-const absolute = (path: string) => new URL(path, self.location.origin).href;
-/** What the reader downloads: the runtime and the models, each at an address that changes only when its contents do. */
-const FILES = {
-  wasm: absolute(wasmUrl),
-  detection: absolute(detectionUrl),
-  recognition: absolute(recognitionUrl),
-  dictionary: absolute(dictionaryUrl),
-};
+/** A part of one of the reader's files (the runtime and the models): its address, named for its contents, and its place in the file. */
+interface Part {
+  key: FileKey;
+  url: string;
+  at: number;
+  size: number;
+}
+const base = new URL(import.meta.env.BASE_URL, self.location.origin).href;
+const PARTS: Part[] = (Object.entries(__READER_PARTS__) as [FileKey, [string, number][]][]).flatMap(([key, list]) => {
+  let at = 0;
+  return list.map(([name, size]) => {
+    const part = { key, url: base + name, at, size };
+    at += size;
+    return part;
+  });
+});
+const SIZES = {} as Record<FileKey, number>;
+for (const part of PARTS) SIZES[part.key] = part.at + part.size;
 // ppu-paddle-ocr points the runtime at jsDelivr when it is imported: clear that, so it only uses what is shipped here
 ort.env.wasm.wasmPaths = undefined;
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
@@ -26,31 +33,30 @@ ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardw
 /**
  * How far the reader has got before it can read a screenshot: downloading its files, loading them, or ready. While it
  * downloads: bytes so far of the total (as served before compression), bytes a second over the last few seconds, whole
- * seconds since any byte came, and how many times a file was fetched again.
+ * seconds since any byte came, and how many times a part was fetched again.
  */
 export type OcrModel = { phase: "download"; loaded: number; total: number; speed: number; quiet: number; retries: number } | { phase: "load" } | { phase: "ready" };
 const report = (model: OcrModel) => self.postMessage({ model } satisfies OcrMessage);
 
-/** A file that sends nothing this long is fetched again, up to TRIES times in all; a slow one that keeps sending is not. */
+/** A part that sends nothing this long is fetched again; a slow one that keeps sending is not. */
 export const STALL_MS = 30_000;
-export const TRIES = 3;
+/** how long to wait before fetching a part again: longer each time, then the last one each time after */
+export const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000];
+/** parts fetched at once */
+const PARALLEL = 4;
 /** how often a download says how far it is */
 const TICK_MS = 500;
 const SPEED_WINDOW_MS = 3_000;
 
-type FileKey = keyof typeof FILES;
-
 /**
- * Where the reader's files stay between visits, so they are downloaded once; named for this site, as other sites share its
- * origin. A file is kept under its address, which changes with its contents, so a kept file is never out of date. Files are
- * kept only once the reader has loaded from them, and dropped when it could not; files other versions kept are deleted
- * once this version's reader has loaded.
+ * Where the reader's parts stay between visits, so each is downloaded once; named for this site, as other sites share its
+ * origin. A part is kept under its address, which changes with its contents, so a kept part is never out of date. Parts
+ * are kept as they arrive, so a download cut off goes on next time from where it was; they are dropped when the reader
+ * could not load from them, and parts other versions kept are deleted once this version's reader has loaded.
  */
 export const STORE = "riven-roll-reader";
 
 async function openStore(): Promise<Cache | null> {
-  // the dev server serves the files at addresses that stay the same when they change
-  if (import.meta.env.DEV) return null;
   try {
     return typeof caches === "undefined" ? null : await caches.open(STORE);
   } catch {
@@ -59,42 +65,65 @@ async function openStore(): Promise<Cache | null> {
   }
 }
 
-/** The files already kept, read back; one that cannot be read is downloaded. */
-async function keptFiles(store: Cache | null): Promise<Map<FileKey, ArrayBuffer>> {
-  const kept = new Map<FileKey, ArrayBuffer>();
-  if (!store) return kept;
-  for (const [key, url] of Object.entries(FILES) as [FileKey, string][]) {
-    try {
-      const hit = await store.match(url);
-      if (hit) kept.set(key, await hit.arrayBuffer());
-    } catch {
-      // read like a file never kept
-    }
+/** A part kept from an earlier visit; one that cannot be read, or is not whole, is downloaded again. */
+async function keptPart(store: Cache | null, part: Part): Promise<Uint8Array | null> {
+  if (!store) return null;
+  try {
+    const hit = await store.match(part.url);
+    const bytes = hit ? new Uint8Array(await hit.arrayBuffer()) : null;
+    return bytes?.length === part.size ? bytes : null;
+  } catch {
+    return null;
   }
-  return kept;
 }
 
-/** Deletes the files other versions kept. */
+/** Deletes the parts other versions kept. */
 async function dropOthers(store: Cache) {
-  const wanted = new Set<string>(Object.values(FILES));
+  const wanted = new Set(PARTS.map((part) => part.url));
   const others = (await store.keys()).filter((request) => !wanted.has(request.url));
   await Promise.all(others.map((request) => store.delete(request)));
 }
 
 async function forget(store: Cache) {
-  await Promise.all(Object.values(FILES).map((url) => store.delete(url))).catch(() => {});
+  await Promise.all(PARTS.map((part) => store.delete(part.url))).catch(() => {});
 }
 
+/** A part the site no longer has (it was updated since the page loaded), or one not as it should be: fetching it again will not help. */
+class Gone extends Error {}
+
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      },
+      { once: true },
+    );
+  });
+
 /**
- * The reader's files: the ones kept from an earlier visit, and the rest downloaded, each fetched again when it fails or
- * stalls; one that cannot be had stops the others.
+ * The reader's files: the parts kept from earlier visits, and the rest downloaded a few at a time, each kept as it
+ * arrives. A part that fails or stalls is fetched again until it comes; one the site no longer has stops the others.
  */
-async function download(kept: Map<FileKey, ArrayBuffer>): Promise<Record<FileKey, ArrayBuffer>> {
-  const missing = (Object.entries(FILES) as [FileKey, string][]).filter(([key]) => !kept.has(key));
-  if (!missing.length) return Object.fromEntries(kept) as Record<FileKey, ArrayBuffer>;
-  const total = Object.values(__READER_SIZES__).reduce((a, b) => a + b, 0);
-  // bytes of each file's current try (a kept file counts in full); every byte received (failed tries included) with when, for the speed
-  const got = new Map<FileKey, number>([...kept].map(([key, file]) => [key, file.byteLength]));
+async function download(store: Cache | null): Promise<Record<FileKey, ArrayBuffer>> {
+  const files = Object.fromEntries(Object.entries(SIZES).map(([key, size]) => [key, new Uint8Array(size)])) as Record<FileKey, Uint8Array<ArrayBuffer>>;
+  const kept = await Promise.all(PARTS.map((part) => keptPart(store, part)));
+  const missing = PARTS.filter((part, i) => {
+    const bytes = kept[i];
+    if (bytes) files[part.key].set(bytes, part.at);
+    return !bytes;
+  });
+  const whole = () => Object.fromEntries(Object.entries(files).map(([key, bytes]) => [key, bytes.buffer])) as Record<FileKey, ArrayBuffer>;
+  if (!missing.length) return whole();
+
+  const total = PARTS.reduce((a, part) => a + part.size, 0);
+  // bytes of the parts already whole, and of each part still coming its current try; every byte received (failed tries
+  // included) with when, for the speed
+  let finished = total - missing.reduce((a, part) => a + part.size, 0);
+  const got = new Map<Part, number>();
   let received = 0;
   let lastByte = Date.now();
   const samples: [number, number][] = [[lastByte, 0]];
@@ -104,10 +133,7 @@ async function download(kept: Map<FileKey, ArrayBuffer>): Promise<Record<FileKey
     const now = Date.now();
     while (samples.length > 1 && now - samples[1][0] >= SPEED_WINDOW_MS) samples.shift();
     const [since, before] = samples[0];
-    const loaded = Math.min(
-      total,
-      [...got.values()].reduce((a, b) => a + b, 0),
-    );
+    const loaded = finished + [...got.values()].reduce((a, b) => a + b, 0);
     const speed = now > since ? Math.round(((received - before) * 1000) / (now - since)) : 0;
     const model: OcrModel = { phase: "download", loaded, total, speed, quiet: Math.floor((now - lastByte) / 1000), retries };
     const text = JSON.stringify(model);
@@ -118,42 +144,44 @@ async function download(kept: Map<FileKey, ArrayBuffer>): Promise<Record<FileKey
   };
 
   const stop = new AbortController();
-  const fetchFile = async (key: FileKey, url: string): Promise<ArrayBuffer> => {
-    for (let attempt = 1; ; attempt++) {
+  const fetchPart = async (part: Part) => {
+    for (let attempt = 0; ; attempt++) {
       stop.signal.throwIfAborted();
-      got.set(key, 0);
+      got.set(part, 0);
       const attemptStop = new AbortController();
       const abort = () => attemptStop.abort();
       stop.signal.addEventListener("abort", abort);
       let stall = setTimeout(abort, STALL_MS);
       try {
-        const res = await fetch(url, { signal: attemptStop.signal });
-        if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
-        // written straight into a buffer of the file's size, grown or cut when the file turns out to differ
-        let bytes = new Uint8Array(__READER_SIZES__[key]);
+        const res = await fetch(part.url, { signal: attemptStop.signal });
+        if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new Gone(`${part.url}: HTTP ${res.status}`);
+        if (!res.ok || !res.body) throw new Error(`${part.url}: HTTP ${res.status}`);
+        const bytes = new Uint8Array(part.size);
         let at = 0;
         for (const reader = res.body.getReader(); ; ) {
           const { done, value } = await reader.read();
           if (done) break;
           clearTimeout(stall);
           stall = setTimeout(abort, STALL_MS);
-          if (at + value.length > bytes.length) {
-            const more = new Uint8Array(Math.max(bytes.length * 2, at + value.length));
-            more.set(bytes.subarray(0, at));
-            bytes = more;
-          }
+          if (at + value.length > part.size) throw new Gone(`${part.url}: more than ${part.size} bytes`);
           bytes.set(value, at);
           at += value.length;
-          got.set(key, at);
+          got.set(part, at);
           received += value.length;
           lastByte = Date.now();
           samples.push([lastByte, received]);
         }
-        return at === bytes.length ? bytes.buffer : bytes.slice(0, at).buffer;
+        if (at < part.size) throw new Error(`${part.url}: ${at} of ${part.size} bytes`);
+        got.delete(part);
+        finished += part.size;
+        files[part.key].set(bytes, part.at);
+        store?.put(part.url, new Response(bytes)).catch(() => {});
+        return;
       } catch (err) {
-        if (stop.signal.aborted || attempt >= TRIES) throw err;
+        if (stop.signal.aborted || err instanceof Gone) throw err;
         retries++;
-        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+        got.set(part, 0);
+        await pause(BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)], stop.signal);
       } finally {
         clearTimeout(stall);
         stop.signal.removeEventListener("abort", abort);
@@ -164,9 +192,14 @@ async function download(kept: Map<FileKey, ArrayBuffer>): Promise<Record<FileKey
   tell();
   const tick = setInterval(tell, TICK_MS);
   try {
-    const files = await Promise.all(missing.map(async ([key, url]) => [key, await fetchFile(key, url)] as const));
+    const queue = [...missing];
+    await Promise.all(
+      Array.from({ length: Math.min(PARALLEL, queue.length) }, async () => {
+        for (let part = queue.shift(); part; part = queue.shift()) await fetchPart(part);
+      }),
+    );
     tell();
-    return Object.fromEntries([...kept, ...files]) as Record<FileKey, ArrayBuffer>;
+    return whole();
   } catch (err) {
     stop.abort();
     throw err;
@@ -180,10 +213,7 @@ function service() {
   ready ??= Promise.resolve()
     .then(async () => {
       const store = await openStore();
-      const kept = await keptFiles(store);
-      const files = await download(kept);
-      // copies of what was just downloaded, taken before the reader gets the files, kept once it has loaded from them
-      const fresh = store ? (Object.keys(FILES) as FileKey[]).filter((key) => !kept.has(key)).map((key) => [FILES[key], new Response(files[key])] as const) : [];
+      const files = await download(store);
       report({ phase: "load" });
       ort.env.wasm.wasmBinary = files.wasm;
       const s = new PaddleOcrService({
@@ -192,16 +222,13 @@ function service() {
       });
       try {
         await s.initialize();
-        if (store) {
-          for (const [url, response] of fresh) store.put(url, response).catch(() => {});
-          dropOthers(store).catch(() => {});
-        }
+        if (store) dropOthers(store).catch(() => {});
         report({ phase: "ready" });
         return s;
       } catch (err) {
         await s.destroy().catch(() => {});
-        // a kept file may be what it could not load from: next time every file is downloaded again
-        if (store && kept.size) await forget(store);
+        // a kept part may be what it could not load from: next time every part is downloaded again
+        if (store) await forget(store);
         throw err;
       }
     })
