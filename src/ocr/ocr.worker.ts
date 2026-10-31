@@ -4,17 +4,20 @@
 import * as ort from "onnxruntime-web";
 import wasmUrl from "onnxruntime-web/ort-wasm-simd-threaded.wasm?url";
 import { PaddleOcrService } from "ppu-paddle-ocr/web";
+import detectionUrl from "./models/PP-OCRv6_tiny_det.ort?url";
+import recognitionUrl from "./models/PP-OCRv6_tiny_rec.ort?url";
+import dictionaryUrl from "./models/ppocrv6_tiny_dict.txt?url";
 import type { OcrItem } from "./parse";
 
 declare const __READER_SIZES__: Record<FileKey, number>;
 
-const base = new URL(import.meta.env.BASE_URL, self.location.origin).href;
-/** What the reader downloads: the runtime Vite ships next to this worker, and the models. */
+const absolute = (path: string) => new URL(path, self.location.origin).href;
+/** What the reader downloads: the runtime and the models, each at an address that changes only when its contents do. */
 const FILES = {
-  wasm: wasmUrl,
-  detection: `${base}models/PP-OCRv6_tiny_det.ort`,
-  recognition: `${base}models/PP-OCRv6_tiny_rec.ort`,
-  dictionary: `${base}models/ppocrv6_tiny_dict.txt`,
+  wasm: absolute(wasmUrl),
+  detection: absolute(detectionUrl),
+  recognition: absolute(recognitionUrl),
+  dictionary: absolute(dictionaryUrl),
 };
 // ppu-paddle-ocr points the runtime at jsDelivr when it is imported: clear that, so it only uses what is shipped here
 ort.env.wasm.wasmPaths = undefined;
@@ -37,11 +40,53 @@ const SPEED_WINDOW_MS = 3_000;
 
 type FileKey = keyof typeof FILES;
 
-/** The reader's files, each fetched again when it fails or stalls; one that cannot be had stops the others. */
-async function download(): Promise<Record<FileKey, ArrayBuffer>> {
+/**
+ * Where the reader's files stay between visits, so they are downloaded once; named for this site, as other sites share its
+ * origin. A file is kept under its address, which changes with its contents, so a kept file is never out of date; files an
+ * earlier version used are deleted. Files are kept only once the reader has loaded from them, and dropped when it could not.
+ */
+export const STORE = "riven-roll-reader";
+
+async function openStore(): Promise<Cache | null> {
+  try {
+    return typeof caches === "undefined" ? null : await caches.open(STORE);
+  } catch {
+    // storage turned off or unavailable, as in some private windows: download every visit
+    return null;
+  }
+}
+
+/** The files already kept, read back; the ones an earlier version kept are deleted on the way. */
+async function keptFiles(store: Cache | null): Promise<Map<FileKey, ArrayBuffer>> {
+  const kept = new Map<FileKey, ArrayBuffer>();
+  if (!store) return kept;
+  try {
+    const wanted = new Set<string>(Object.values(FILES));
+    for (const request of await store.keys()) if (!wanted.has(request.url)) await store.delete(request);
+    for (const [key, url] of Object.entries(FILES) as [FileKey, string][]) {
+      const hit = await store.match(url);
+      if (hit) kept.set(key, await hit.arrayBuffer());
+    }
+  } catch {
+    // a store that cannot be read is no worse than an empty one
+  }
+  return kept;
+}
+
+async function forget(store: Cache) {
+  await Promise.all(Object.values(FILES).map((url) => store.delete(url))).catch(() => {});
+}
+
+/**
+ * The reader's files: the ones kept from an earlier visit, and the rest downloaded, each fetched again when it fails or
+ * stalls; one that cannot be had stops the others.
+ */
+async function download(kept: Map<FileKey, ArrayBuffer>): Promise<Record<FileKey, ArrayBuffer>> {
+  const missing = (Object.entries(FILES) as [FileKey, string][]).filter(([key]) => !kept.has(key));
+  if (!missing.length) return Object.fromEntries(kept) as Record<FileKey, ArrayBuffer>;
   const total = Object.values(__READER_SIZES__).reduce((a, b) => a + b, 0);
-  // bytes of each file's current try; every byte received (failed tries included) with when, for the speed
-  const got = new Map<FileKey, number>();
+  // bytes of each file's current try (a kept file counts in full); every byte received (failed tries included) with when, for the speed
+  const got = new Map<FileKey, number>([...kept].map(([key, file]) => [key, file.byteLength]));
   let received = 0;
   let lastByte = Date.now();
   const samples: [number, number][] = [[lastByte, 0]];
@@ -111,9 +156,9 @@ async function download(): Promise<Record<FileKey, ArrayBuffer>> {
   tell();
   const tick = setInterval(tell, TICK_MS);
   try {
-    const files = await Promise.all(Object.entries(FILES).map(async ([key, url]) => [key, await fetchFile(key as FileKey, url)] as const));
+    const files = await Promise.all(missing.map(async ([key, url]) => [key, await fetchFile(key, url)] as const));
     tell();
-    return Object.fromEntries(files) as Record<FileKey, ArrayBuffer>;
+    return Object.fromEntries([...kept, ...files]) as Record<FileKey, ArrayBuffer>;
   } catch (err) {
     stop.abort();
     throw err;
@@ -126,7 +171,11 @@ let ready: Promise<PaddleOcrService> | null = null;
 function service() {
   ready ??= Promise.resolve()
     .then(async () => {
-      const files = await download();
+      const store = await openStore();
+      const kept = await keptFiles(store);
+      const files = await download(kept);
+      // copies of what was just downloaded, taken before the reader gets the files, kept once it has loaded from them
+      const fresh = store ? (Object.keys(FILES) as FileKey[]).filter((key) => !kept.has(key)).map((key) => [FILES[key], new Response(files[key])] as const) : [];
       report({ phase: "load" });
       ort.env.wasm.wasmBinary = files.wasm;
       const s = new PaddleOcrService({
@@ -135,10 +184,13 @@ function service() {
       });
       try {
         await s.initialize();
+        for (const [url, response] of fresh) store?.put(url, response).catch(() => {});
         report({ phase: "ready" });
         return s;
       } catch (err) {
         await s.destroy().catch(() => {});
+        // a kept file may be what it could not load from: next time every file is downloaded again
+        if (store && kept.size) await forget(store);
         throw err;
       }
     })

@@ -5,9 +5,9 @@ import { defineConfig } from "vitest/config";
 /** The files the screenshot reader downloads, at their size before the server compresses them: what its progress counts up to. */
 const readerSizes = {
   wasm: statSync("node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm").size,
-  detection: statSync("public/models/PP-OCRv6_tiny_det.ort").size,
-  recognition: statSync("public/models/PP-OCRv6_tiny_rec.ort").size,
-  dictionary: statSync("public/models/ppocrv6_tiny_dict.txt").size,
+  detection: statSync("src/ocr/models/PP-OCRv6_tiny_det.ort").size,
+  recognition: statSync("src/ocr/models/PP-OCRv6_tiny_rec.ort").size,
+  dictionary: statSync("src/ocr/models/ppocrv6_tiny_dict.txt").size,
 };
 
 export default defineConfig({

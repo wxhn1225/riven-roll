@@ -117,6 +117,98 @@ it("downloads the reader's files with their progress, then loads them, then is r
   expect(posted().findIndex((m) => m.model?.phase === "ready")).toBeLessThan(posted().findIndex((m) => m.id === 1));
 });
 
+/** the browser's store for the reader's files, kept in memory */
+const memoryStore = () => {
+  const files = new Map<string, ArrayBuffer>();
+  const store = {
+    keys: async () => [...files.keys()].map((url) => new Request(url)),
+    match: async (url: string) => (files.has(url) ? new Response(files.get(url)) : undefined),
+    put: async (url: string, response: Response) => void files.set(url, await response.arrayBuffer()),
+    delete: async (request: Request | string) => files.delete(typeof request === "string" ? request : request.url),
+  };
+  return { files, open: vi.fn(async () => store) };
+};
+
+/** the next visit: a fresh worker, with whatever the browser kept */
+const revisit = async () => {
+  vi.resetModules();
+  vi.mocked(fetch).mockClear();
+  scope.postMessage.mockClear();
+  mocks.options.mockClear();
+  reader = await import("./ocr.worker");
+};
+
+it("keeps the downloaded files, and reads them back next visit without downloading", async () => {
+  const kept = memoryStore();
+  vi.stubGlobal("caches", { open: kept.open });
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  await vi.waitFor(() => expect(kept.files.size).toBe(4));
+  expect(kept.open).toHaveBeenCalledWith(reader.STORE);
+
+  await revisit();
+  await scope.onmessage({ data: { id: 2, image: new ArrayBuffer(1) } });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(progress()).toEqual([{ phase: "load" }, { phase: "ready" }]);
+  const { model } = mocks.options.mock.calls[0][0] as { model: Record<string, ArrayBuffer> };
+  expect([model.detection.byteLength, model.recognition.byteLength, model.charactersDictionary.byteLength]).toEqual([
+    __READER_SIZES__.detection,
+    __READER_SIZES__.recognition,
+    __READER_SIZES__.dictionary,
+  ]);
+  expect((mocks.env.wasm.wasmBinary as ArrayBuffer).byteLength).toBe(__READER_SIZES__.wasm);
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 2, ok: true }));
+});
+
+it("downloads only the files not kept, and deletes the ones an earlier version kept", async () => {
+  const kept = memoryStore();
+  vi.stubGlobal("caches", { open: kept.open });
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  await vi.waitFor(() => expect(kept.files.size).toBe(4));
+  const recognition = [...kept.files.keys()].find((url) => url.endsWith("_rec.ort")) as string;
+  kept.files.delete(recognition);
+  const old = "https://example.test/assets/PP-OCRv6_tiny_rec-old.ort";
+  kept.files.set(old, new ArrayBuffer(3));
+
+  await revisit();
+  await scope.onmessage({ data: { id: 2, image: new ArrayBuffer(1) } });
+  expect(vi.mocked(fetch).mock.calls.map(([url]) => String(url))).toEqual([recognition]);
+  const total = Object.values(__READER_SIZES__).reduce((a, b) => a + b, 0);
+  // the progress starts from what was kept
+  expect(progress()[0]).toEqual(expect.objectContaining({ phase: "download", loaded: total - __READER_SIZES__.recognition, total }));
+  expect(kept.files.has(old)).toBe(false);
+  await vi.waitFor(() => expect(kept.files.has(recognition)).toBe(true));
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 2, ok: true }));
+});
+
+it("keeps nothing the reader could not load from, and drops kept files it could not load from", async () => {
+  const kept = memoryStore();
+  vi.stubGlobal("caches", { open: kept.open });
+  mocks.initialize.mockRejectedValueOnce(new Error("not a model"));
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 1, ok: false, init: true }));
+  expect(kept.files.size).toBe(0);
+
+  // loaded fine and kept, then a later visit cannot load from what was kept
+  await scope.onmessage({ data: { id: 2, image: new ArrayBuffer(1) } });
+  await vi.waitFor(() => expect(kept.files.size).toBe(4));
+  await revisit();
+  mocks.initialize.mockRejectedValueOnce(new Error("damaged"));
+  await scope.onmessage({ data: { id: 3, image: new ArrayBuffer(1) } });
+  expect(fetch).not.toHaveBeenCalled();
+  expect(kept.files.size).toBe(0);
+  // so the next try downloads them again
+  await scope.onmessage({ data: { id: 4, image: new ArrayBuffer(1) } });
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 4, ok: true }));
+});
+
+it("downloads as before when the browser will not keep files", async () => {
+  vi.stubGlobal("caches", { open: vi.fn().mockRejectedValue(new DOMException("denied", "SecurityError")) });
+  await scope.onmessage({ data: { id: 1, image: new ArrayBuffer(1) } });
+  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(answers().at(-1)).toEqual(expect.objectContaining({ id: 1, ok: true }));
+});
+
 it("fetches a file again when the server fails, without counting its bytes twice", async () => {
   vi.useFakeTimers();
   vi.mocked(fetch).mockResolvedValueOnce(new Response("busy", { status: 503 }));

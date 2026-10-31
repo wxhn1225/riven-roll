@@ -24,8 +24,7 @@ npm run build    # 生产构建（GitHub Pages 由 .github/workflows/deploy.yml 
 ## 目录
 
 - `src/engine/` 公式、可出词条、求解器（`solver.ts`）及测试
-- `src/ocr/` 截图识别（PaddleOCR PP-OCRv6 tiny，Apache-2.0）和解析
+- `src/ocr/` 截图识别（PaddleOCR PP-OCRv6 tiny，Apache-2.0）、解析和识别模型
 - `src/ui/` 界面
-- `public/models/` 识别模型
 
 玩家自制，与 Digital Extremes 无关。
