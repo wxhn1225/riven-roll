@@ -21,6 +21,28 @@ npm test         # 单元测试
 npm run build    # 生产构建（GitHub Pages 由 .github/workflows/deploy.yml 自动构建）
 ```
 
+## Docker 部署
+
+```bash
+# 构建并启动（默认端口 14444）
+docker compose up -d --build
+
+# 停止
+docker compose down
+```
+
+## 同步上游更新
+
+```bash
+# Windows PowerShell
+.\scripts\update.ps1
+
+# Linux / macOS / Git Bash
+./scripts/update.sh
+```
+
+脚本会拉取上游、合并、运行测试和构建，然后自动重启 Docker 容器。
+
 ## 目录
 
 - `src/engine/` 公式、可出词条、求解器（`solver.ts`）及测试

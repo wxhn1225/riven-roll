@@ -1,0 +1,6 @@
+services:
+  riven-roll:
+    build: .
+    ports:
+      - "14444:80"
+    restart: unless-stopped

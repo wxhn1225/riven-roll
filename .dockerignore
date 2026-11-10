@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.gitignore
+.github
+.vscode
+.idea
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
+docker-compose.yml
+scripts
