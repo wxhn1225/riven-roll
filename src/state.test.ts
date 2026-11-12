@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { statOf } from "./engine/data";
+import { DEFAULT_DISPOSITION, displayNumber, LAYOUTS, layoutKey, rawValue, setDisposition, W_MAX } from "./engine/formula";
 import { cycleCost } from "./engine/solver";
 import {
   afterKeep,
   afterMissed,
+  asDisplayedMaxTarget,
   barRange,
   cardProblem,
   compareCount,
@@ -13,6 +16,9 @@ import {
   demoSession,
   firstShown,
   fmtRoll,
+  type GroupDraft,
+  groupBar,
+  isExactMaxGroup,
   loadSession,
   plannedRoll,
   readQuality,
@@ -28,7 +34,10 @@ import {
   withCounted,
 } from "./state";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setDisposition(DEFAULT_DISPOSITION);
+});
 
 const L31 = { pos: 3, neg: 1 } as const;
 
@@ -422,6 +431,126 @@ describe("typed values", () => {
     expect(fmtRoll(1.07)).toBe("1.07");
     expect(fmtRoll(1.075)).toBe("1.075");
     expect(fmtRoll(1.0394)).toBe("1.0394");
+  });
+});
+
+describe("displayed maximum targets", () => {
+  const L21 = { pos: 2, neg: 1 } as const;
+  const max = (tags: string[]): GroupDraft => ({ tags, tier: "max" });
+
+  it("uses the displayed maximum for normal and spliced traits", () => {
+    const t = defaultTarget();
+    for (const tag of ["WeaponDamageAmountMod", "WeaponAmmoEfficiency"]) {
+      const stat = statOf("Pistol", tag);
+      const shown = displayNumber(stat, rawValue(stat, L21, false, W_MAX));
+      const bar = groupBar("Pistol", t, max([tag]), tag, L21);
+      expect(bar).toBeGreaterThan(1.09);
+      expect(bar).toBeLessThan(W_MAX);
+      expect(displayNumber(stat, rawValue(stat, L21, false, bar))).toBe(shown);
+      expect(displayNumber(stat, rawValue(stat, L21, false, bar - 0.00001))).toBeLessThan(shown);
+      if (tag === "WeaponAmmoEfficiency") {
+        expect(shown).toBe(73.5);
+        expect(bar).toBeCloseTo(1.0991395115852358, 12);
+      }
+    }
+  });
+
+  it("keeps a separate maximum for every alternative and layout", () => {
+    const tags = ["WeaponDamageAmountMod", "WeaponFactionDamageGrineer", "WeaponRecoilReductionMod"];
+    const t = { ...defaultTarget(), sets: [[max(tags)]], layouts: LAYOUTS.map(layoutKey) };
+    const group = toEngineTarget(t, "Pistol")?.groups[0];
+    expect(group?.tags).toEqual(tags);
+    const bars: number[] = [];
+    for (const tag of tags) {
+      const stat = statOf("Pistol", tag);
+      const direction = tag === "WeaponRecoilReductionMod" ? -1 : 1;
+      for (const layout of LAYOUTS) {
+        const bar = group?.minWBy?.[tag]?.[layoutKey(layout)];
+        expect(bar).toBeDefined();
+        if (bar == null) throw new Error("missing bar");
+        bars.push(bar);
+        const shown = displayNumber(stat, rawValue(stat, layout, false, W_MAX));
+        expect(displayNumber(stat, rawValue(stat, layout, false, bar))).toBe(shown);
+        expect(direction * displayNumber(stat, rawValue(stat, layout, false, bar - 0.00001))).toBeLessThan(direction * shown);
+      }
+    }
+    expect(group?.minW).toBe(Math.min(...bars));
+    expect(new Set(Object.values(group?.minWBy?.WeaponDamageAmountMod ?? {})).size).toBe(4);
+  });
+
+  it("follows disposition changes", () => {
+    const tag = "WeaponAmmoEfficiency";
+    const t = { ...defaultTarget(), sets: [[max([tag])]], layouts: ["21"] };
+    const initial = toEngineTarget(t, "Pistol")?.groups[0].minW;
+    setDisposition(0.8);
+    const next = toEngineTarget(t, "Pistol")?.groups[0].minW;
+    expect(next).not.toBe(initial);
+    expect(next).toBe(valueToW("Pistol", tag, L21, 49));
+    expect(t.sets[0][0].tier).toBe("max");
+  });
+
+  it("converts only exact maximum groups when requested", () => {
+    const tags = ["WeaponDamageAmountMod"];
+    const preserved: GroupDraft[] = [
+      ...[0.9, 1, 1.07, 1.08, 1.09, 1.09999, 1.10001].map((w): GroupDraft => ({ tags, tier: "w", w })),
+      { tags, tier: "any" },
+      { tags, tier: "value", value: 1.1 },
+      max(tags),
+    ];
+    const exact: GroupDraft[] = [
+      { tags, tier: "w", w: 1.1 },
+      { tags, tier: "mid" },
+      { tags, tier: "hi" },
+    ];
+    const t = {
+      ...defaultTarget(),
+      tiers: { mid: 1.1, hi: 1.1 },
+      sets: [exact, preserved],
+      atLeast: { on: true, k: 2, tier: "hi" as const },
+      allowedNeg: ["WeaponZoomFovMod"],
+      layouts: ["21", "31"],
+      objective: "kuva" as const,
+    };
+    const before = structuredClone(t);
+    const converted = asDisplayedMaxTarget(t);
+    expect(exact.every((g) => isExactMaxGroup(t, g))).toBe(true);
+    expect(preserved.some((g) => isExactMaxGroup(t, g))).toBe(false);
+    expect(converted.sets[0]).toEqual(exact.map(() => max(tags)));
+    expect(converted.sets[1]).toEqual(preserved);
+    expect(converted).toEqual({ ...before, sets: [exact.map(() => max(tags)), preserved] });
+    expect(converted.atLeast).toBe(t.atLeast);
+    expect(t).toEqual(before);
+  });
+
+  it("keeps raw bars and the count rule unchanged", () => {
+    const tags = ["WeaponDamageAmountMod"];
+    const t = { ...defaultTarget(), tiers: { mid: 1, hi: 1.1 }, atLeast: { on: true, k: 1, tier: "hi" as const } };
+    for (const w of [0.9, 1, 1.07, 1.08, 1.09, 1.1]) {
+      const group: GroupDraft = { tags, tier: "w", w };
+      expect(groupBar("Pistol", t, group, tags[0], L31)).toBe(w);
+      const target = toEngineTarget({ ...t, sets: [[group]] }, "Pistol");
+      expect(target?.groups[0]).toEqual({ tags, minW: w });
+      expect(target?.atLeast).toEqual({ k: 1, w: 1.1 });
+    }
+    const target = toEngineTarget(asDisplayedMaxTarget({ ...t, sets: [[{ tags, tier: "hi" }]] }), "Pistol");
+    expect(target?.groups[0].minW).toBeLessThan(W_MAX);
+    expect(target?.atLeast).toEqual({ k: 1, w: 1.1 });
+  });
+
+  it("saves maximum choices without changing old raw bars", () => {
+    const session = defaultSession();
+    session.target.sets = [[{ tags: ["WeaponDamageAmountMod"], tier: "w", w: 1.1 }, max(["WeaponAmmoEfficiency"])]];
+    const getItem = vi.fn();
+    const setItem = vi.fn();
+    vi.stubGlobal("localStorage", { getItem, setItem });
+    saveSession(session);
+    getItem.mockReturnValue(setItem.mock.calls[0][1]);
+    expect(loadSession().target.sets).toEqual(session.target.sets);
+    expect(repairSession({ target: { sets: [[{ tags: ["WeaponDamageAmountMod"], tier: "w", w: 1.1 }]] } }).target.sets[0][0]).toEqual({
+      tags: ["WeaponDamageAmountMod"],
+      tier: "w",
+      w: 1.1,
+    });
   });
 });
 

@@ -1,12 +1,15 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { weaponById } from "../engine/data";
 import type { RouteStats } from "../engine/planner";
 import { poolFor } from "../engine/pool";
 import type { Route } from "../engine/solver";
+import { strings } from "../i18n";
 import { readTarget } from "../quick";
 import { afterMissed, defaultTarget, demoSession, effectiveLayouts, stepAfter } from "../state";
 import { patchFrom } from "./QuickTarget";
-import { routeView } from "./RouteList";
+import { RouteList, routeView } from "./RouteList";
 import { routeKey } from "./routeText";
 import { countRule } from "./Target";
 
@@ -78,5 +81,44 @@ describe("the count rule note", () => {
     ]);
     // a target still being filled in (a row without a stat) is left out, as the plan leaves it out
     expect(countRule({ ...base, sets: [[...groups(1), { tags: [], tier: "any" as const }], groups(1)] })).toEqual([["", 1]]);
+  });
+});
+
+describe("the exact maximum message", () => {
+  const text = strings("zh");
+  const markup = (countAtMaximum: boolean) => {
+    const session = demoSession("zh");
+    session.target.sets = [[{ tags: ["WeaponAmmoEfficiency"], tier: "w", w: 1.1 }]];
+    session.target.tiers.hi = 1.1;
+    session.target.atLeast.on = countAtMaximum;
+    return renderToStaticMarkup(
+      createElement(RouteList, {
+        s: text,
+        lang: "zh",
+        cls: "Pistol",
+        card: session.card,
+        session,
+        plan: { kind: "unreachable", why: { kind: "exactMax", tags: ["WeaponAmmoEfficiency"] } },
+        chosen: null,
+        by: "cycles",
+        onSort: () => {},
+        onChoose: () => {},
+        onMissed: () => {},
+        onPaste: () => {},
+        onRetry: () => {},
+        onDisplayedMax: () => {},
+      }),
+    );
+  };
+
+  it("offers an explicit display-value choice instead of calling the target impossible", () => {
+    const html = markup(false);
+    expect(html).toContain(text.routes.why({ kind: "exactMax", tags: [] }, String));
+    expect(html).toContain(text.target.useDisplayedMax);
+    expect(html).not.toContain(text.routes.why({ kind: "other" }, String));
+  });
+
+  it("does not offer a whole-target conversion that leaves an exact count rule", () => {
+    expect(markup(true)).not.toContain(text.target.useDisplayedMax);
   });
 });

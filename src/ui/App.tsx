@@ -11,6 +11,7 @@ import {
   afterKeep,
   afterMissed,
   allGroups,
+  asDisplayedMaxTarget,
   type CardDraft,
   cardLayout,
   cardProblem,
@@ -564,6 +565,7 @@ export function App() {
                 onMissed={onMissed}
                 onPaste={pick}
                 onRetry={() => setRetry((n) => n + 1)}
+                onDisplayedMax={() => update((x) => ({ ...x, target: asDisplayedMaxTarget(x.target), chosen: null }))}
               />
             ) : (
               <section className="panel routes-panel">

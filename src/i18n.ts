@@ -99,6 +99,9 @@ export function strings(l: Lang) {
         roll: "Roll ≥",
         value: "Value",
         never: "out of reach",
+        displayedMax: "Displayed maximum",
+        displayedMaxTip: "Each stat uses its maximum displayed value in each selected layout.",
+        useDisplayedMax: "Use displayed maximum",
         negatives: "Negative",
         noNeg: "None wanted",
         accept: "Accept",
@@ -158,6 +161,8 @@ export function strings(l: Lang) {
         done: "This riven already meets the target.",
         why: (r: Unreachable, name: (tag: string) => string) => {
           switch (r.kind) {
+            case "exactMax":
+              return "The current model cannot estimate an exact 1.10 roll. A maximum displayed value does not require an exact 1.10 roll.";
             case "barTooHigh":
               return `The bar for ${r.tags.map(name).join(" / ")} is above the best roll (1.10) in the chosen layouts.`;
             case "tooMany":
@@ -315,6 +320,9 @@ export function strings(l: Lang) {
         roll: "浮動 ≥",
         value: "數值",
         never: "達不到",
+        displayedMax: "卡面滿值",
+        displayedMaxTip: "每條特性按所選布局各自的卡面最大顯示值計算。",
+        useDisplayedMax: "按卡面滿值計算",
         negatives: "負面",
         noNeg: "不要負面",
         accept: "可接受",
@@ -374,6 +382,8 @@ export function strings(l: Lang) {
         done: "已經達成目標了。",
         why: (r: Unreachable, name: (tag: string) => string) => {
           switch (r.kind) {
+            case "exactMax":
+              return "目前模型無法估算精確浮動 1.10。卡面顯示滿值不要求浮動恰好等於 1.10。";
             case "barTooHigh":
               return `「${r.tags.map(name).join("」或「")}」的門檻超過了最大浮動 1.10，在所選布局下出不來。`;
             case "tooMany":
@@ -530,6 +540,9 @@ export function strings(l: Lang) {
       roll: "浮动 ≥",
       value: "数值",
       never: "达不到",
+      displayedMax: "卡面满值",
+      displayedMaxTip: "每条属性按所选布局各自的卡面最大显示值计算。",
+      useDisplayedMax: "按卡面满值计算",
       negatives: "负面",
       noNeg: "不要负面",
       accept: "可接受",
@@ -589,6 +602,8 @@ export function strings(l: Lang) {
       done: "已经达到目标了。",
       why: (r: Unreachable, name: (tag: string) => string) => {
         switch (r.kind) {
+          case "exactMax":
+            return "当前模型无法估算精确浮动 1.10。卡面显示满值不要求浮动恰好等于 1.10。";
           case "barTooHigh":
             return `「${r.tags.map(name).join("」或「")}」的门槛超过了最大浮动 1.10，在所选布局下出不来。`;
           case "tooMany":

@@ -12,6 +12,7 @@ import {
   fmtRoll,
   type GroupDraft,
   groupBar,
+  isExactMaxGroup,
   shownAt,
   shownRange,
   showsUp,
@@ -156,6 +157,16 @@ export function Target({ s, lang, cls, pool, target, onChange }: Props) {
               </small>
             )}
           </label>
+          {g.tags.length > 0 && isExactMaxGroup(target, g) && (
+            <button type="button" className="text-btn" onClick={() => setGroup({ tier: "max", w: undefined, value: undefined })}>
+              {s.target.useDisplayedMax}
+            </button>
+          )}
+          {g.tier === "max" && (
+            <small className="muted" title={s.target.displayedMaxTip}>
+              {s.target.displayedMax}
+            </small>
+          )}
           {mixed && g.value != null && (
             <small className="muted mixed-bars">{g.tags.map((t) => `${statName(cls, t, lang)}${valueBar(cls, t, g.value as number)}`).join(" / ")}</small>
           )}

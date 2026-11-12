@@ -32,8 +32,8 @@ export interface CardDraft {
   cycles: number;
 }
 
-/** any / mid / hi are presets; "w" is a typed roll bar, "value" a typed shown value */
-export type Tier = "any" | "mid" | "hi" | "w" | "value";
+/** "max" is the highest shown value; "w" and "value" are typed bars. */
+export type Tier = "any" | "mid" | "hi" | "w" | "value" | "max";
 
 export interface GroupDraft {
   tags: string[];
@@ -176,7 +176,7 @@ export function stepAfter(step: Session["step"], price: number, route?: string):
 }
 const trait = (v: unknown): TraitDraft | null =>
   isObj(v) && typeof v.tag === "string" ? { tag: v.tag, shown: isNum(v.shown) ? v.shown : null, ...(v.auto === true ? { auto: true } : {}) } : null;
-const TIERS: Tier[] = ["any", "mid", "hi", "w", "value"];
+const TIERS: Tier[] = ["any", "mid", "hi", "w", "value", "max"];
 function group(v: unknown): GroupDraft | null {
   if (!isObj(v) || !Array.isArray(v.tags)) return null;
   // a row with no stat yet is a draft the player is still filling in: keep it (it is not planned until filled)
@@ -483,8 +483,21 @@ export function minW(t: TargetDraft, tier: Tier, g?: GroupDraft) {
   return tier === "hi" ? t.tiers.hi : tier === "mid" ? t.tiers.mid : 0.9;
 }
 
-/** The roll bar of a wanted row in a layout (a typed value converts per stat and layout). */
+export function isExactMaxGroup(t: TargetDraft, g: GroupDraft): boolean {
+  return (g.tier === "w" || g.tier === "mid" || g.tier === "hi") && minW(t, g.tier, g) === W_MAX;
+}
+
+export function asDisplayedMaxTarget(t: TargetDraft): TargetDraft {
+  return { ...t, sets: t.sets.map((gs) => gs.map((g) => (isExactMaxGroup(t, g) ? { tags: g.tags, tier: "max" } : g))) };
+}
+
+/** The roll bar of a wanted row in a layout. Shown values convert per stat and layout. */
 export function groupBar(cls: RivenClass, t: TargetDraft, g: GroupDraft, tag: string, layout: Layout): number {
+  if (g.tier === "max") {
+    const stat = statOf(cls, tag);
+    const shown = displayNumber(stat, rawValue(stat, layout, false, W_MAX));
+    return minimumQualityForDisplay(stat, layout, false, shown);
+  }
   if (g.tier === "value" && g.value != null) return valueToW(cls, tag, layout, signedValue(cls, tag, g.value));
   return minW(t, g.tier, g);
 }
@@ -605,7 +618,7 @@ export function toEngineTarget(t: TargetDraft, cls: RivenClass): Target | null {
   let next = 0;
   const index = sets.map((gs) => gs.map(() => next++));
   const groups = flat.map((g) => {
-    if (g.tier !== "value" || g.value == null) return { tags: g.tags, minW: minW(t, g.tier, g) };
+    if (g.tier !== "max" && (g.tier !== "value" || g.value == null)) return { tags: g.tags, minW: minW(t, g.tier, g) };
     const minWBy: Record<string, Record<string, number>> = {};
     for (const tag of g.tags) {
       minWBy[tag] = {};

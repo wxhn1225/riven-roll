@@ -4,7 +4,7 @@ import type { Unreachable } from "../engine/diagnose";
 import type { RouteStats } from "../engine/engine.worker";
 import { cycleCost } from "../engine/solver";
 import { fmtKuva, fmtPct, type Strings } from "../i18n";
-import { type CardDraft, type Session, statName } from "../state";
+import { allGroups, type CardDraft, isExactMaxGroup, type Session, statName } from "../state";
 import { Segmented } from "./controls";
 import { KuvaIcon, SplicerIcon, StatIcon } from "./icons";
 import { type KeepWhen, keepWhen, lockedName, routeKey, routeTag, routeTitle, splicedOn } from "./routeText";
@@ -61,11 +61,12 @@ interface Props {
   onPaste: () => void;
   /** work the routes out again after a failure */
   onRetry: () => void;
+  onDisplayedMax: () => void;
 }
 
 const fmtCycles = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)));
 
-export function RouteList({ s, lang, cls, card, session, plan, chosen, by, onSort, onChoose, onMissed, onPaste, onRetry }: Props) {
+export function RouteList({ s, lang, cls, card, session, plan, chosen, by, onSort, onChoose, onMissed, onPaste, onRetry, onDisplayedMax }: Props) {
   const budget = session.kuva;
   const routesRaw = plan.kind === "ok" ? plan.routes : plan.kind === "busy" ? plan.last : undefined;
   const { routes, sortBy, budgetMatters, open: openKey } = routeView(routesRaw ?? [], by, budget, chosen);
@@ -103,6 +104,16 @@ export function RouteList({ s, lang, cls, card, session, plan, chosen, by, onSor
       <section className="panel routes-panel">
         {head}
         <p className={`empty${plan.kind === "done" ? " good" : plan.kind === "unreachable" || plan.kind === "error" ? " warn" : ""}`}>{msg}</p>
+        {plan.kind === "unreachable" &&
+          plan.why.kind === "exactMax" &&
+          allGroups(session.target).some((g) => isExactMaxGroup(session.target, g)) &&
+          !(session.target.atLeast.on && session.target.tiers[session.target.atLeast.tier] === 1.1) && (
+            <div className="loop retry">
+              <button type="button" className="btn" onClick={onDisplayedMax}>
+                {s.target.useDisplayedMax}
+              </button>
+            </div>
+          )}
         {plan.kind === "error" && (
           <div className="loop retry">
             <button type="button" className="btn" onClick={onRetry}>

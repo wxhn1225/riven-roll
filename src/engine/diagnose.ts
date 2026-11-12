@@ -16,6 +16,8 @@ export type Unreachable =
    * it under the bar, or has it in a layout the target does not take (changing the layout would cycle it away)
    */
   | { kind: "cannotRoll"; tags: string[]; onCard: "none" | "bar" | "layout"; layout: string }
+  /** every alternative needs a new roll at the exact upper endpoint */
+  | { kind: "exactMax"; tags: string[] }
   | { kind: "other" };
 
 /** The first reason that rules out every alternative target, or "other". */
@@ -25,7 +27,14 @@ export function whyUnreachable(card: Card, target: Target, pool?: Pool): Unreach
   const need = (g: number, tag: string, l: Layout) => groups[g].minWBy?.[tag]?.[layoutKey(l)] ?? groups[g].minW;
   if (layouts.every((l) => l.neg === 1) && !allowedNeg.length) return { kind: "noNegative" };
 
+  // A perfect trait already held can be kept, or pass its quality to a splice.
+  const heldMax = new Set([...card.pos, ...(card.spliced ? [card.spliced] : [])].filter((t) => t.w >= W_MAX).map((t) => t.tag));
+  const ingredients = [...card.pos, ...(card.neg ? [card.neg] : [])].filter((t) => t.w >= W_MAX);
+  for (const recipe of pool?.splices ?? []) if (ingredients.some((t) => t.tag === recipe.a || t.tag === recipe.b)) heldMax.add(recipe.result);
+
   let first: Unreachable | null = null;
+  let endpointSets = 0;
+  const endpointTags = new Set<string>();
   for (const set of sets) {
     const tooHigh = set.find((g) => groups[g].tags.every((tag) => layouts.every((l) => need(g, tag, l) > W_MAX + 1e-9)));
     if (tooHigh != null) {
@@ -50,8 +59,23 @@ export function whyUnreachable(card: Card, target: Target, pool?: Pool): Unreach
       first ??= { kind: "tooMany", need: set.length, max };
       continue;
     }
+    const possibleLayouts = layouts.filter((l) => l.pos >= set.length);
+    const needsEndpoint =
+      possibleLayouts.length > 0 &&
+      possibleLayouts.every((l) => {
+        const exact = set.filter((g) => groups[g].tags.every((tag) => need(g, tag, l) >= W_MAX && !heldMax.has(tag)) && groups[g].tags.some((tag) => need(g, tag, l) === W_MAX));
+        const count = target.atLeast?.w === W_MAX && Math.min(target.atLeast.k, set.length) > set.filter((g) => groups[g].tags.some((tag) => heldMax.has(tag))).length;
+        for (const g of count ? set : exact) for (const tag of groups[g].tags) endpointTags.add(tag);
+        return exact.length > 0 || count;
+      });
+    if (needsEndpoint) {
+      endpointSets++;
+      continue;
+    }
     // this alternative looks possible on its own; something subtler blocks it
     return { kind: "other" };
   }
+  if (endpointSets === sets.length) return { kind: "exactMax", tags: [...endpointTags] };
+  if (endpointSets > 0) return { kind: "other" };
   return first ?? { kind: "other" };
 }
